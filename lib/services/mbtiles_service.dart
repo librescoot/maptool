@@ -32,9 +32,36 @@ class MBTilesService {
     'water_polygons_labels',
   ];
 
+  static const Set<String> streetsToKeep = {
+    'track',
+    'path',
+    'service',
+    'unclassified',
+    'residential',
+    'tertiary',
+    'secondary',
+    'primary',
+    'trunk',
+    'living_street',
+    'pedestrian',
+    'taxiway',
+    'busway',
+
+    // "footway",
+    // "motorway",
+    // "rail",
+    // "subway",
+    // "light_rail",
+    // "tram",
+    // "narrow_gauge",
+    // "cycleway",
+    // "steps",
+  };
+
   /// Processes an MBTiles file by removing specified layers
   /// Returns the path to the processed file
-  Future<String> processMBTiles(String inputFilePath, String outputFilePath) async {
+  Future<String> processMBTiles(
+      String inputFilePath, String outputFilePath) async {
     // Initialize SQLite
     if (Platform.isWindows || Platform.isLinux) {
       sqfliteFfiInit();
@@ -45,32 +72,32 @@ class MBTilesService {
     final tempFilePath = inputFilePath + '.temp';
     final inputFile = File(inputFilePath);
     await inputFile.copy(tempFilePath);
-    
+
     // Open the database
     Database? db;
     try {
       db = await openDatabase(tempFilePath);
-      
+
       // Check if it's a valid MBTiles file
-      final tables = await db.query('sqlite_master', 
-                                   columns: ['name'], 
-                                   where: "type = 'table' AND name = 'tiles'");
-      
+      final tables = await db.query('sqlite_master',
+          columns: ['name'], where: "type = 'table' AND name = 'tiles'");
+
       if (tables.isEmpty) {
         throw Exception('Not a valid MBTiles file (missing tiles table)');
       }
-      
+
       // Get the count of tiles
-      final countResult = await db.rawQuery('SELECT COUNT(*) as count FROM tiles');
+      final countResult =
+          await db.rawQuery('SELECT COUNT(*) as count FROM tiles');
       final tileCount = Sqflite.firstIntValue(countResult) ?? 0;
-      
+
       print('Processing $tileCount tiles...');
-      
+
       // Process tiles in batches to avoid memory issues
       const batchSize = 100;
       int processedCount = 0;
       int modifiedCount = 0;
-      
+
       for (int i = 0; i < tileCount; i += batchSize) {
         final tiles = await db.query(
           'tiles',
@@ -78,20 +105,20 @@ class MBTilesService {
           limit: batchSize,
           offset: i,
         );
-        
+
         final batch = db.batch();
-        
+
         for (final tile in tiles) {
           processedCount++;
-          
+
           final zoomLevel = tile['zoom_level'] as int;
           final tileColumn = tile['tile_column'] as int;
           final tileRow = tile['tile_row'] as int;
           final tileData = tile['tile_data'] as Uint8List;
-          
+
           try {
             final processedData = await _processTileData(tileData);
-            
+
             // Only update if the tile was modified
             if (processedData != null) {
               batch.update(
@@ -103,30 +130,34 @@ class MBTilesService {
               modifiedCount++;
             }
           } catch (e) {
-            print('Error processing tile at z=$zoomLevel, x=$tileColumn, y=$tileRow: $e');
+            print(
+                'Error processing tile at z=$zoomLevel, x=$tileColumn, y=$tileRow: $e');
           }
-          
+
           // Provide progress updates
           if (processedCount % 100 == 0) {
-            print('Processed $processedCount / $tileCount tiles, modified $modifiedCount tiles');
+            print(
+                'Processed $processedCount / $tileCount tiles, modified $modifiedCount tiles');
           }
         }
-        
+
         await batch.commit();
       }
-      
+
       print('Processed $processedCount tiles, modified $modifiedCount tiles');
-      
+
       // Close the database
       await db.close();
       db = null;
-      
+
       // Copy the processed file to the output location
       await File(tempFilePath).copy(outputFilePath);
-      
+
       // Delete the temporary file
       await File(tempFilePath).delete();
-      
+
+      print('Street kinds: $streetKinds');
+
       return outputFilePath;
     } catch (e) {
       print('Error processing MBTiles: $e');
@@ -134,7 +165,7 @@ class MBTilesService {
       if (db != null) {
         await db.close();
       }
-      
+
       try {
         if (await File(tempFilePath).exists()) {
           await File(tempFilePath).delete();
@@ -142,7 +173,7 @@ class MBTilesService {
       } catch (e) {
         print('Error deleting temporary file: $e');
       }
-      
+
       rethrow;
     }
   }
@@ -152,7 +183,7 @@ class MBTilesService {
     if (tileData.isEmpty) {
       return null;
     }
-    
+
     try {
       // Decompress the tile data
       List<int> decompressedData;
@@ -162,7 +193,7 @@ class MBTilesService {
         print('Error decompressing tile data: $e');
         return null;
       }
-      
+
       // Parse the tile using generated protobuf code
       Tile tile;
       try {
@@ -171,40 +202,70 @@ class MBTilesService {
         print('Error parsing tile protobuf: $e');
         return null;
       }
-      
+
       // Filter out the layers we want to remove
       bool modified = false;
       final filteredLayers = <Tile_Layer>[];
-      
+
       for (final layer in tile.layers) {
         if (!layersToRemove.contains(layer.name)) {
+          if (layer.name == 'streets') {
+            // if this is a street layer, we want to filter out some of the streets
+            // that are not relevant to us.
+            final List<Tile_Feature> filteredFeatures = [];
+
+            features:
+            for (final feature in layer.features) {
+              for (int i = 0; i < feature.tags.length; i += 2) {
+                if (i + 1 < feature.tags.length) {
+                  final keyIndex = feature.tags[i];
+                  final valueIndex = feature.tags[i + 1];
+                  if (keyIndex < layer.keys.length &&
+                      valueIndex < layer.values.length) {
+                    final key = layer.keys[keyIndex];
+                    final value = layer.values[valueIndex];
+                    if (key == 'kind' &&
+                        !streetsToKeep.contains(value.stringValue)) {
+                      continue features;
+                    }
+                  }
+                }
+              }
+
+              filteredFeatures.add(feature);
+            }
+
+            layer.features.clear();
+            layer.features.addAll(filteredFeatures);
+          }
+
           filteredLayers.add(layer);
         } else {
           modified = true;
           print('Removing layer: ${layer.name}');
         }
       }
-      
+
       // If no layers were removed, return null to skip updating
       if (!modified) {
         return null;
       }
-      
+
       // Create new tile with filtered layers
       final newTile = Tile()
         ..layers.clear()
         ..layers.addAll(filteredLayers);
-      
+
       // Serialize the tile back to protobuf format
       final serializedData = newTile.writeToBuffer();
-      
+
       // Compress with gzip
       final compressedData = GZipEncoder().encode(serializedData);
-      
+
       if (compressedData == null) {
         throw Exception('Failed to compress tile data');
       }
-      
+
       return Uint8List.fromList(compressedData);
     } catch (e) {
       print('Error processing vector tile: $e');
