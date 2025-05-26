@@ -8,7 +8,8 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/vector_tile.dart'; // This now imports the generated protobuf file
 
 class MBTilesService {
-  static const List<String> layersToRemove = [
+  // This list now defines layers that are NOT kept by default when global settings are first initialized.
+  static const List<String> defaultLayersToNotKeep = [
     'addresses',
     'aerialways',
     'boundaries',
@@ -31,6 +32,43 @@ class MBTilesService {
     'water_lines_labels',
     'water_polygons_labels',
   ];
+
+  // Static global state for layer selection. True means keep, false means remove.
+  static Map<String, bool>? _staticGlobalLayersToKeepSelection;
+
+  // Public getter for the selection
+  // Now accesses the static variable.
+  Map<String, bool> get globalLayersToKeepSelection {
+    if (_staticGlobalLayersToKeepSelection == null) {
+      // This should ideally not happen if initializeGlobalLayerSelectionsIfNeeded is called correctly.
+      print("Warning: globalLayersToKeepSelection accessed before static initialization. Initializing with empty map.");
+      _staticGlobalLayersToKeepSelection = {};
+    }
+    return _staticGlobalLayersToKeepSelection!;
+  }
+
+  // Method to initialize or update a specific layer's selection
+  // Now updates the static variable.
+  void setGlobalLayerKeepSelection(String layerName, bool shouldKeep) {
+    _staticGlobalLayersToKeepSelection ??= {};
+    _staticGlobalLayersToKeepSelection![layerName] = shouldKeep;
+  }
+
+  // Initializes the global selection if it hasn't been done yet.
+  // Takes all available layer names to set up the initial state.
+  // Now checks and initializes the static variable.
+  void initializeGlobalLayerSelectionsIfNeeded(Iterable<String> allAvailableLayerNames) {
+    if (_staticGlobalLayersToKeepSelection == null) {
+      _staticGlobalLayersToKeepSelection = {};
+      for (final layerName in allAvailableLayerNames) {
+        // If a layer is in defaultLayersToNotKeep, it should NOT be kept by default (false).
+        // Otherwise, it SHOULD be kept by default (true).
+        _staticGlobalLayersToKeepSelection![layerName] = !defaultLayersToNotKeep.contains(layerName);
+      }
+      print("Global layer selections initialized (static): $_staticGlobalLayersToKeepSelection");
+    }
+  }
+
 
   static const Set<String> streetsToKeep = {
     'track',
@@ -61,7 +99,12 @@ class MBTilesService {
   /// Processes an MBTiles file by removing specified layers
   /// Returns the path to the processed file
   Future<String> processMBTiles(
-      String inputFilePath, String outputFilePath) async {
+    String inputFilePath,
+    String outputFilePath, {
+    List<String>? dynamicLayersToRemove, // Optional parameter for dynamic layers
+    void Function(double progress)? onProgress, // Callback for progress updates
+  }) async {
+    final Set<String> encounteredLayerNames = {}; // To store unique layer names
     // Initialize SQLite
     if (Platform.isWindows || Platform.isLinux) {
       sqfliteFfiInit();
@@ -117,7 +160,8 @@ class MBTilesService {
           final tileData = tile['tile_data'] as Uint8List;
 
           try {
-            final processedData = await _processTileData(tileData);
+            // Pass the dynamic list of layers to remove to _processTileData
+            final processedData = await _processTileData(tileData, encounteredLayerNames, dynamicLayersToRemove);
 
             // Only update if the tile was modified
             if (processedData != null) {
@@ -135,7 +179,10 @@ class MBTilesService {
           }
 
           // Provide progress updates
-          if (processedCount % 100 == 0) {
+          if (onProgress != null) {
+            final progress = tileCount > 0 ? processedCount / tileCount : 0.0;
+            onProgress(progress);
+          } else if (processedCount % 100 == 0) { // Fallback to console logging if no callback
             print(
                 'Processed $processedCount / $tileCount tiles, modified $modifiedCount tiles');
           }
@@ -144,7 +191,11 @@ class MBTilesService {
         await batch.commit();
       }
 
+      if (onProgress != null) {
+        onProgress(1.0); // Ensure completion is reported
+      }
       print('Processed $processedCount tiles, modified $modifiedCount tiles');
+      print('Encountered layer types: ${encounteredLayerNames.toList()..sort()}');
 
       // Close the database
       await db.close();
@@ -177,10 +228,17 @@ class MBTilesService {
   }
 
   /// Process an individual tile by removing specified layers
-  Future<Uint8List?> _processTileData(Uint8List tileData) async {
+  Future<Uint8List?> _processTileData(
+    Uint8List tileData,
+    Set<String> encounteredLayerNames, [
+    List<String>? currentLayersToRemove,
+  ]) async {
     if (tileData.isEmpty) {
       return null;
     }
+
+    final effectiveLayersToRemove = currentLayersToRemove ?? defaultLayersToNotKeep;
+
 
     try {
       // Decompress the tile data
@@ -206,7 +264,9 @@ class MBTilesService {
       final filteredLayers = <Tile_Layer>[];
 
       for (final layer in tile.layers) {
-        if (!layersToRemove.contains(layer.name)) {
+        encounteredLayerNames.add(layer.name); // Collect layer name
+
+        if (!effectiveLayersToRemove.contains(layer.name)) {
           if (layer.name == 'streets') {
             // if this is a street layer, we want to filter out some of the streets
             // that are not relevant to us.
