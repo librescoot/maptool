@@ -23,10 +23,10 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
   double _processingProgress = 0.0; // Added for processing progress
   late Region _currentRegion;
 
-  // State for layer visibility - using a Map to store visibility for each layer
-  // true means the layer IS selected for REMOVAL
-  // false means the layer is NOT selected for removal (i.e., it will be KEPT)
-  late Map<String, bool> _layerVisibility; // Initialized in initState
+  // State for layer selection - using a Map to store selection state for each layer
+  // true means the layer IS selected to be KEPT
+  // false means the layer is NOT selected to be kept (i.e., it will be REMOVED)
+  late Map<String, bool> _layersToKeep; // Initialized in initState
 
   // Descriptions for layers - this defines all layers that can be configured
   final Map<String, String> _layerDescriptions = {
@@ -46,10 +46,10 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
     'pois': 'Points of Interest.', // Added
     'public_transport': 'Public transport routes and stops.',
     'sites': 'Various site polygons (e.g., parks, industrial areas).', // Moved for alphabetical consistency
+    'streets': 'Street centerlines.', // Added
     'street_labels': 'General labels for streets.', // Added
     'street_labels_points': 'Point labels for streets.',
     'street_polygons': 'Polygons representing streets (e.g., pedestrian areas).',
-    'streets': 'Street centerlines.', // Added
     'streets_polygons_labels': 'Labels for street polygons.',
     'water_lines': 'Lines representing rivers, streams, etc.', // Added
     'water_lines_labels': 'Labels for water lines (rivers, streams).',
@@ -61,16 +61,18 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
   void initState() {
     super.initState();
     _currentRegion = widget.region;
-    _initializeLayerVisibility();
+    _initializeLayersToKeep();
   }
 
-  void _initializeLayerVisibility() {
-    _layerVisibility = {};
-    // MBTilesService.layersToRemove contains layers that should be pre-selected for removal (value: true)
+  void _initializeLayersToKeep() {
+    _layersToKeep = {};
+    // MBTilesService.layersToRemove contains layers that should be initially UNCHECKED (i.e., not kept by default).
     const defaultLayersToRemove = MBTilesService.layersToRemove;
 
     for (final layerName in _layerDescriptions.keys) {
-      _layerVisibility[layerName] = defaultLayersToRemove.contains(layerName);
+      // If a layer is in defaultLayersToRemove, it should NOT be kept by default (false).
+      // Otherwise, it SHOULD be kept by default (true).
+      _layersToKeep[layerName] = !defaultLayersToRemove.contains(layerName);
     }
   }
 
@@ -165,14 +167,15 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
       print('Saving to: $saveLocation');
 
       // Compile the list of layers to remove
-      // If entry.value is true, it means the layer is CHECKED in the "Configure Layers to Remove" dialog,
-      // so it should be added to the list of layers to actually remove.
-      final List<String> layersToActuallyRemove = _layerVisibility.entries
-          .where((entry) => entry.value) 
+      // If entry.value is false (unchecked in "Configure Layers to Keep" dialog),
+      // it means the user wants to REMOVE this layer.
+      final List<String> layersToActuallyRemove = _layersToKeep.entries
+          .where((entry) => !entry.value) // Inverted logic: if not kept, then remove.
           .map((entry) => entry.key)
           .toList();
 
-      print('Layers selected for removal: $layersToActuallyRemove');
+      print('Layers selected for KEEPING: ${_layersToKeep.entries.where((e) => e.value).map((e) => e.key).toList()}');
+      print('Layers to be REMOVED (derived): $layersToActuallyRemove');
 
       final processedFilePath = await _mbtilesService.processMBTiles(
         downloadedFilePath,
@@ -269,8 +272,8 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.layers_clear),
-                        tooltip: 'Configure Layers to Remove',
+                        icon: const Icon(Icons.layers), // Changed icon to reflect "keep"
+                        tooltip: 'Configure Layers to Keep',
                         onPressed: () {
                           _showSettingsOverlay(context);
                         },
@@ -305,10 +308,10 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('Configure Layers to Remove'),
+              title: const Text('Configure Layers to Keep'),
               content: SingleChildScrollView(
                 child: ListBody(
-                  children: _layerVisibility.keys.map((String layerName) {
+                  children: _layersToKeep.keys.map((String layerName) {
                     return CheckboxListTile(
                       title: Text(layerName
                           .replaceAll('_', ' ')
@@ -316,20 +319,16 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
                           .map((e) => e[0].toUpperCase() + e.substring(1))
                           .join(' ')), // Prettify name
                       subtitle: Text(_layerDescriptions[layerName] ?? 'No description available.'),
-                      value: _layerVisibility[layerName],
+                      value: _layersToKeep[layerName],
                       onChanged: (bool? value) {
                         setDialogState(() {
-                          _layerVisibility[layerName] = value ?? false;
+                          _layersToKeep[layerName] = value ?? true; // Default to true if null
                         });
                         // Update the main screen state to reflect changes
                         setState(() {
-                          _layerVisibility[layerName] = value ?? false;
+                          _layersToKeep[layerName] = value ?? true; // Default to true if null
                         });
-                        // This is where you would inform MBTilesService about the layers to remove
-                        // For now, we just print it. The actual list of layers to remove
-                        // in MBTilesService is static. This UI now prepares a list
-                        // that will be passed to MBTilesService.
-                        print("Layer $layerName selected for removal: ${_layerVisibility[layerName]}");
+                        print("Layer $layerName selected for KEEPING: ${_layersToKeep[layerName]}");
                       },
                     );
                   }).toList(),
