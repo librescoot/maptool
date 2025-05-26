@@ -58,7 +58,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      // Ensure we have a valid default profile with proper layer selections
       await _dbService.ensureValidDefaultProfile();
       
       final profiles = await _dbService.getAllProfiles();
@@ -79,15 +78,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
         if (processedExists) {
           status = RegionStatus.processed;
-          currentFilePath = processedFilePath;
+          currentFilePath = processedFilePath; // This might be the processed file path
         } else if (originalExists) {
           status = RegionStatus.downloaded;
         }
         
         enrichedRegions.add(
           staticRegion.copyWith(
-            filePath: currentFilePath,
-            processedFilePath: processedExists ? processedFilePath : null,
+            filePath: originalExists ? originalFilePath : null, // Store original path if exists
+            processedFilePath: processedExists ? processedFilePath : null, // Store processed path if exists
             status: status,
             progress: (status == RegionStatus.downloaded || status == RegionStatus.processed) ? 1.0 : 0.0,
           )
@@ -185,43 +184,49 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildRegionListItem(Region region) {
     final currentStatus = _activeOperations[region.name] ?? region.status;
     final currentProgress = _operationProgress[region.name] ?? region.progress;
-    final bool isOperating = currentStatus == RegionStatus.downloading || currentStatus == RegionStatus.processing;
 
     List<Widget> buttons = [];
     switch (currentStatus) {
       case RegionStatus.notDownloaded:
-      case RegionStatus.error:
         buttons.add(_buildDownloadButton(region));
-        if (region.filePath != null || region.processedFilePath != null) {
+        break;
+      case RegionStatus.error: 
+        buttons.add(_buildDownloadButton(region)); // Allow retry
+        if (region.filePath != null || region.processedFilePath != null) { // If files exist from a previous attempt
           buttons.add(const SizedBox(width: 8));
-          buttons.add(_buildCleanupFilesButton(region));
+          buttons.add(_buildCleanButton(region));
         }
         break;
       case RegionStatus.downloading:
-        buttons.add(_buildInProgressButton(currentStatus, currentProgress));
-        // Show disabled buttons for other actions during download
-        buttons.add(const SizedBox(width: 8));
-        buttons.add(_buildRedownloadSplitButton(region, disabled: true));
-        if (region.filePath != null) {
-          buttons.add(const SizedBox(width: 8));
-          buttons.add(_buildProcessSplitButton(region, isProcessed: false, disabled: true));
-        }
+        buttons.add(_buildInProgressButton(currentStatus, currentProgress, "Downloading"));
         break;
       case RegionStatus.processing:
-        // Show disabled buttons for other actions during processing
-        buttons.add(_buildRedownloadSplitButton(region, disabled: true));
+         // During processing, show the "Processing..." button and disable others
+        buttons.add(_buildRedownloadButton(region, disabled: true));
         buttons.add(const SizedBox(width: 8));
-        buttons.add(_buildInProgressButton(currentStatus, currentProgress));
+        buttons.add(_buildCleanButton(region, disabled: true));
+        buttons.add(const SizedBox(width: 8));
+        buttons.add(_buildInProgressButton(currentStatus, currentProgress, "Processing"));
+        buttons.add(const SizedBox(width: 8));
+        buttons.add(_buildProcessOptionsButton(region, disabled: true));
         break;
       case RegionStatus.downloaded:
-        buttons.add(_buildRedownloadSplitButton(region));
+        buttons.add(_buildRedownloadButton(region));
         buttons.add(const SizedBox(width: 8));
-        buttons.add(_buildProcessSplitButton(region, isProcessed: false));
+        buttons.add(_buildCleanButton(region));
+        buttons.add(const SizedBox(width: 8));
+        buttons.add(_buildProcessButton(region));
+        buttons.add(const SizedBox(width: 8));
+        buttons.add(_buildProcessOptionsButton(region));
         break;
       case RegionStatus.processed:
-        buttons.add(_buildRedownloadSplitButton(region));
+        buttons.add(_buildRedownloadButton(region));
         buttons.add(const SizedBox(width: 8));
-        buttons.add(_buildProcessSplitButton(region, isProcessed: true));
+        buttons.add(_buildCleanButton(region));
+        buttons.add(const SizedBox(width: 8));
+        buttons.add(_buildProcessButton(region)); 
+        buttons.add(const SizedBox(width: 8));
+        buttons.add(_buildProcessOptionsButton(region));
         break;
     }
 
@@ -258,115 +263,90 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildDownloadButton(Region region) {
-    return ElevatedButton.icon(
+    return TextButton.icon(
       icon: const Icon(Icons.download, size: 18),
       label: const Text('Download'),
       onPressed: () => _onDownload(region),
-      style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
-    );
-  }
-   Widget _buildCleanupFilesButton(Region region) {
-    return TextButton.icon(
-      icon: Icon(Icons.delete_sweep_outlined, size: 18, color: Colors.grey[700]),
-      label: Text('Cleanup', style: TextStyle(color: Colors.grey[700], fontSize: 12)),
-      onPressed: () => _onDelete(region, true),
-      style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8)),
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        foregroundColor: Colors.green, // Changed to green
+      ),
     );
   }
 
-
-  Widget _buildInProgressButton(RegionStatus status, double progress) {
-    String text = status == RegionStatus.downloading ? 'Downloading' : 'Processing';
-    // If progress is 0 or 1 (or not available), show indeterminate spinner in button
-    // Otherwise, show determinate spinner.
+  Widget _buildInProgressButton(RegionStatus status, double progress, String operationName) {
     bool isDeterminate = progress > 0 && progress < 1;
-    return OutlinedButton.icon(
+    return TextButton.icon( // Changed from OutlinedButton to TextButton
       icon: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, value: isDeterminate ? progress : null)),
-      label: Text('$text ${isDeterminate ? (progress * 100).toStringAsFixed(0) + '%' : ''}'),
-      onPressed: null, // TODO: Implement cancel
-      style: OutlinedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          disabledForegroundColor: Theme.of(context).textTheme.bodySmall?.color),
+      label: Text('$operationName ${isDeterminate ? (progress * 100).toStringAsFixed(0) + '%' : ''}'),
+      onPressed: null, 
+      style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          disabledForegroundColor: Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.7),
+          // Match the foreground color of the original download button if needed, or keep default
+          foregroundColor: status == RegionStatus.downloading ? Colors.green : Theme.of(context).colorScheme.primary,
+      ),
     );
   }
 
-  Widget _buildSplitButtonBase(
-      {required IconData icon,
-      required String label,
-      required VoidCallback? onPressed,
-      required Color backgroundColor,
-      required Color foregroundColor,
-      required List<PopupMenuEntry<String>> menuItems,
-      required PopupMenuItemSelected<String>? onMenuSelected}) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        ElevatedButton.icon(
-          icon: Icon(icon, size: 18),
-          label: Text(label),
-          onPressed: onPressed,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: backgroundColor,
-            foregroundColor: foregroundColor,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.only(topLeft: Radius.circular(8), bottomLeft: Radius.circular(8)),
-            ),
-          ),
-        ),
-        Container(width: 1, height: 36, color: foregroundColor.withOpacity(0.3)), // Divider
-        Material(
-          color: backgroundColor,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.only(topRight: Radius.circular(8), bottomRight: Radius.circular(8)),
-          ),
-          child: PopupMenuButton<String>(
-            icon: Icon(Icons.arrow_drop_down, color: foregroundColor),
-            tooltip: 'More options',
-            onSelected: onMenuSelected,
-            itemBuilder: (BuildContext context) => menuItems,
-            padding: EdgeInsets.zero,
-            enabled: onMenuSelected != null && menuItems.isNotEmpty,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildRedownloadSplitButton(Region region, {bool disabled = false}) {
-    return _buildSplitButtonBase(
-      icon: Icons.refresh,
-      label: 'Redownload',
+  Widget _buildRedownloadButton(Region region, {bool disabled = false}) {
+    return TextButton.icon(
+      icon: const Icon(Icons.refresh, size: 18),
+      label: const Text('Redownload'),
       onPressed: disabled ? null : () => _onRedownload(region),
-      backgroundColor: disabled ? Colors.grey : Colors.orange,
-      foregroundColor: Colors.white,
-      onMenuSelected: disabled ? null : (String value) {
-        if (value == 'delete') _onDelete(region);
-      },
-      menuItems: disabled ? [] : [
-        const PopupMenuItem<String>(value: 'delete', child: ListTile(leading: Icon(Icons.delete), title: Text('Delete Files'))),
-      ],
+      style: TextButton.styleFrom(
+        foregroundColor: disabled ? Colors.grey.shade400 : Colors.orange,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      ),
     );
   }
 
-  Widget _buildProcessSplitButton(Region region, {required bool isProcessed, bool disabled = false}) {
-    return _buildSplitButtonBase(
-      icon: Icons.settings_applications,
-      label: isProcessed ? 'Re-Process' : 'Process',
+  Widget _buildCleanButton(Region region, {bool disabled = false}) {
+    return TextButton.icon(
+      icon: const Icon(Icons.delete_outline, size: 18),
+      label: const Text('Clean'),
+      onPressed: disabled ? null : () => _onDelete(region),
+      style: TextButton.styleFrom(
+        foregroundColor: disabled ? Colors.grey.shade400 : Colors.red,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      ),
+    );
+  }
+
+  Widget _buildProcessButton(Region region, {bool disabled = false}) {
+    return TextButton.icon(
+      icon: const Icon(Icons.play_arrow, size: 18),
+      label: const Text('Process'),
       onPressed: disabled ? null : () => _onProcess(region, _defaultProfile),
-      backgroundColor: disabled ? Colors.grey : Theme.of(context).colorScheme.primary,
-      foregroundColor: Colors.white,
-      onMenuSelected: disabled ? null : (String value) {
-        if (value == 'manage_profiles') _showProfileEditor(context);
-        else if (value == 'process_with') _showProcessWithProfilePicker(context, region);
-        else {
+      style: TextButton.styleFrom(
+        foregroundColor: disabled ? Colors.grey.shade400 : Theme.of(context).colorScheme.primary,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      ),
+    );
+  }
+
+  Widget _buildProcessOptionsButton(Region region, {bool disabled = false}) {
+    return PopupMenuButton<String>(
+      icon: Icon(Icons.more_horiz, size: 20, color: disabled ? Colors.grey.shade400 : Theme.of(context).colorScheme.primary),
+      tooltip: 'Process with specific profile',
+      enabled: !disabled,
+      onSelected: (String value) {
+        if (value == 'manage_profiles') {
+          _showProfileEditor(context);
+        } else {
           final selectedProfile = _profiles.firstWhere((p) => p.id == value, orElse: () => _defaultProfile!);
           _onProcess(region, selectedProfile);
         }
       },
-      menuItems: disabled ? [] : [
-        const PopupMenuItem<String>(value: 'manage_profiles', child: ListTile(leading: Icon(Icons.edit_note), title: Text('Manage Profiles'))),
-        const PopupMenuItem<String>(value: 'process_with', child: ListTile(leading: Icon(Icons.playlist_play), title: Text('Process with...'))),
+      itemBuilder: (BuildContext context) => [
+        const PopupMenuItem<String>(
+          value: 'manage_profiles',
+          child: ListTile(
+            leading: Icon(Icons.edit_note),
+            title: Text('Manage Profiles'),
+            dense: true,
+          ),
+        ),
         if (_profiles.isNotEmpty) const PopupMenuDivider(),
         ..._profiles.map((profile) => PopupMenuItem<String>(
               value: profile.id,
@@ -397,6 +377,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (mounted) {
             setState(() {
               _operationProgress[region.name] = progress;
+               // Keep status as downloading, only update progress
               _updateRegionInList(region.copyWith(progress: progress, status: RegionStatus.downloading));
             });
           }
@@ -445,15 +426,16 @@ class _HomeScreenState extends State<HomeScreen> {
           }
         }
       }
-
+      
+      // After deleting, the region should be back to notDownloaded state
+      // and file paths should be cleared.
       final updatedRegion = region.copyWith(
         status: RegionStatus.notDownloaded,
-        filePath: null,
+        filePath: null, 
         processedFilePath: null,
-        clearProcessedFilePath: true,
         progress: 0.0,
         errorMessage: null,
-        clearErrorMessage: true
+        clearErrorMessage: true // This will clear any existing error message
       );
       _updateRegionInList(updatedRegion);
       
@@ -488,10 +470,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (profileToUse == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No profile available for processing.')));
-      final loadedDefaultProfile = await _dbService.getDefaultProfile(); // Try to load/ensure default
+      final loadedDefaultProfile = await _dbService.getDefaultProfile(); 
         if (mounted) setState(() => _defaultProfile = loadedDefaultProfile);
         if (loadedDefaultProfile == null) {
-           _showProfileEditor(context); // Prompt to create one
+           _showProfileEditor(context); 
            return;
         }
         profileToUse = loadedDefaultProfile;
@@ -505,12 +487,10 @@ class _HomeScreenState extends State<HomeScreen> {
     
     if (_activeOperations.containsKey(region.name)) return;
 
-    // Generate suggested filename: RegionName_ProfileName.mbtiles
     final sanitizedRegionName = region.name.replaceAll(RegExp(r'[^\w\s-]'), '').replaceAll(RegExp(r'\s+'), '_');
     final sanitizedProfileName = profileToUse.name.replaceAll(RegExp(r'[^\w\s-]'), '').replaceAll(RegExp(r'\s+'), '_');
     final suggestedFileName = '${sanitizedRegionName}_${sanitizedProfileName}.mbtiles';
 
-    // Show file picker to choose save location
     String? outputFilePath = await FilePicker.platform.saveFile(
       dialogTitle: 'Save processed map as...',
       fileName: suggestedFileName,
@@ -519,11 +499,9 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (outputFilePath == null) {
-      // User cancelled the file picker
       return;
     }
 
-    // Ensure the file has the correct extension
     if (!outputFilePath.toLowerCase().endsWith('.mbtiles')) {
       outputFilePath = '$outputFilePath.mbtiles';
     }
@@ -579,7 +557,7 @@ class _HomeScreenState extends State<HomeScreen> {
     Map<String, bool> layerSelections = {};
     List<String> allKnownLayers = MBTilesService.publicLayerDescriptions.keys.toList();
 
-    allKnownLayers.sort(); // Sort alphabetically for consistent display
+    allKnownLayers.sort(); 
 
     if (existingProfile != null) {
       for (var layer in allKnownLayers) {
@@ -625,7 +603,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(height: 8),
                       SizedBox(
                         height: MediaQuery.of(context).size.height * 0.35,
-                        width: MediaQuery.of(context).size.width * 0.8, // Ensure dialog has reasonable width
+                        width: MediaQuery.of(context).size.width * 0.8, 
                         child: Container(
                           decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(4)),
                           child: ListView.builder(
@@ -677,9 +655,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         await _dbService.setDefaultProfile(profileToSave.id);
                       } else if (!isDefault && originalIsDefault) {
                          final otherDefaults = await _dbService.getAllProfiles().then((list) => list.where((p) => p.isDefault && p.id != profileToSave.id));
-                         if(otherDefaults.isEmpty && _profiles.length > 1) { // If it was the only default and there are other profiles
-                            // Optionally, prompt user to select a new default or auto-select one.
-                            // For now, we allow no default if explicitly unset.
+                         if(otherDefaults.isEmpty && _profiles.length > 1) { 
+                            if (_profiles.length == 1 && _profiles.first.id == profileToSave.id) {
+                                await _dbService.setDefaultProfile(profileToSave.id);
+                            }
                          }
                       }
                       
@@ -695,53 +674,5 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       },
     );
-  }
-
-  Future<void> _showProcessWithProfilePicker(BuildContext context, Region region) async {
-    if (_profiles.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No profiles available. Please create one first.')),
-      );
-      _showProfileEditor(context); // Optionally open editor if no profiles exist
-      return;
-    }
-
-    Profile? selectedProfile = await showDialog<Profile>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: Text('Process ${region.name} with:'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: _profiles.length,
-              itemBuilder: (BuildContext context, int index) {
-                final profile = _profiles[index];
-                return ListTile(
-                  title: Text(profile.name),
-                  subtitle: Text('${profile.layersToKeep.length} layers to keep' + (profile.isDefault ? ' (Default)' : '')),
-                  onTap: () {
-                    Navigator.of(dialogContext).pop(profile);
-                  },
-                );
-              },
-            ),
-          ),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('Cancel'),
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-              },
-            ),
-          ],
-        );
-      },
-    );
-
-    if (selectedProfile != null) {
-      _onProcess(region, selectedProfile);
-    }
   }
 }

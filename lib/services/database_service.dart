@@ -30,7 +30,6 @@ class DatabaseService {
     _database = await _initDatabase();
     return _database!;
   }
-
   _initDatabase() async {
     Directory documentsDirectory = await getApplicationDocumentsDirectory();
     String path = join(documentsDirectory.path, _databaseName);
