@@ -8,7 +8,8 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/vector_tile.dart'; // This now imports the generated protobuf file
 
 class MBTilesService {
-  static const List<String> layersToRemove = [
+  // This list now defines layers that are NOT kept by default when global settings are first initialized.
+  static const List<String> defaultLayersToNotKeep = [
     'addresses',
     'aerialways',
     'boundaries',
@@ -31,6 +32,43 @@ class MBTilesService {
     'water_lines_labels',
     'water_polygons_labels',
   ];
+
+  // Static global state for layer selection. True means keep, false means remove.
+  static Map<String, bool>? _staticGlobalLayersToKeepSelection;
+
+  // Public getter for the selection
+  // Now accesses the static variable.
+  Map<String, bool> get globalLayersToKeepSelection {
+    if (_staticGlobalLayersToKeepSelection == null) {
+      // This should ideally not happen if initializeGlobalLayerSelectionsIfNeeded is called correctly.
+      print("Warning: globalLayersToKeepSelection accessed before static initialization. Initializing with empty map.");
+      _staticGlobalLayersToKeepSelection = {};
+    }
+    return _staticGlobalLayersToKeepSelection!;
+  }
+
+  // Method to initialize or update a specific layer's selection
+  // Now updates the static variable.
+  void setGlobalLayerKeepSelection(String layerName, bool shouldKeep) {
+    _staticGlobalLayersToKeepSelection ??= {};
+    _staticGlobalLayersToKeepSelection![layerName] = shouldKeep;
+  }
+
+  // Initializes the global selection if it hasn't been done yet.
+  // Takes all available layer names to set up the initial state.
+  // Now checks and initializes the static variable.
+  void initializeGlobalLayerSelectionsIfNeeded(Iterable<String> allAvailableLayerNames) {
+    if (_staticGlobalLayersToKeepSelection == null) {
+      _staticGlobalLayersToKeepSelection = {};
+      for (final layerName in allAvailableLayerNames) {
+        // If a layer is in defaultLayersToNotKeep, it should NOT be kept by default (false).
+        // Otherwise, it SHOULD be kept by default (true).
+        _staticGlobalLayersToKeepSelection![layerName] = !defaultLayersToNotKeep.contains(layerName);
+      }
+      print("Global layer selections initialized (static): $_staticGlobalLayersToKeepSelection");
+    }
+  }
+
 
   static const Set<String> streetsToKeep = {
     'track',
@@ -199,7 +237,8 @@ class MBTilesService {
       return null;
     }
 
-    final effectiveLayersToRemove = currentLayersToRemove ?? layersToRemove; // Use dynamic list if provided, else static
+    final effectiveLayersToRemove = currentLayersToRemove ?? defaultLayersToNotKeep;
+
 
     try {
       // Decompress the tile data

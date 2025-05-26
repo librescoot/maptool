@@ -23,37 +23,32 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
   double _processingProgress = 0.0; // Added for processing progress
   late Region _currentRegion;
 
-  // State for layer selection - using a Map to store selection state for each layer
-  // true means the layer IS selected to be KEPT
-  // false means the layer is NOT selected to be kept (i.e., it will be REMOVED)
-  late Map<String, bool> _layersToKeep; // Initialized in initState
-
   // Descriptions for layers - this defines all layers that can be configured
   final Map<String, String> _layerDescriptions = {
     'addresses': 'Individual address points.',
     'aerialways': 'Cable cars, ski lifts, etc.',
     'boundaries': 'Administrative and other boundaries.',
     'boundary_labels': 'Labels for boundaries.',
-    'bridges': 'Bridge structures.', // Added
+    'bridges': 'Bridge structures.',
     'buildings': 'Building footprints.',
     'dam_lines': 'Lines representing dams.',
     'ferries': 'Ferry routes.',
-    'land': 'General land use areas.', // Added
+    'land': 'General land use areas.',
     'ocean': 'Areas representing oceans.',
     'pier_lines': 'Lines representing piers.',
     'pier_polygons': 'Polygons representing piers.',
     'place_labels': 'Labels for cities, towns, and other places.',
-    'pois': 'Points of Interest.', // Added
+    'pois': 'Points of Interest.',
     'public_transport': 'Public transport routes and stops.',
-    'sites': 'Various site polygons (e.g., parks, industrial areas).', // Moved for alphabetical consistency
-    'streets': 'Street centerlines.', // Added
-    'street_labels': 'General labels for streets.', // Added
+    'sites': 'Various site polygons (e.g., parks, industrial areas).',
+    'streets': 'Street centerlines.',
+    'street_labels': 'General labels for streets.',
     'street_labels_points': 'Point labels for streets.',
     'street_polygons': 'Polygons representing streets (e.g., pedestrian areas).',
     'streets_polygons_labels': 'Labels for street polygons.',
-    'water_lines': 'Lines representing rivers, streams, etc.', // Added
+    'water_lines': 'Lines representing rivers, streams, etc.',
     'water_lines_labels': 'Labels for water lines (rivers, streams).',
-    'water_polygons': 'Polygons representing lakes, reservoirs, etc.', // Added
+    'water_polygons': 'Polygons representing lakes, reservoirs, etc.',
     'water_polygons_labels': 'Labels for water polygons (lakes, reservoirs).',
   };
 
@@ -61,19 +56,8 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
   void initState() {
     super.initState();
     _currentRegion = widget.region;
-    _initializeLayersToKeep();
-  }
-
-  void _initializeLayersToKeep() {
-    _layersToKeep = {};
-    // MBTilesService.layersToRemove contains layers that should be initially UNCHECKED (i.e., not kept by default).
-    const defaultLayersToRemove = MBTilesService.layersToRemove;
-
-    for (final layerName in _layerDescriptions.keys) {
-      // If a layer is in defaultLayersToRemove, it should NOT be kept by default (false).
-      // Otherwise, it SHOULD be kept by default (true).
-      _layersToKeep[layerName] = !defaultLayersToRemove.contains(layerName);
-    }
+    // Initialize global layer selections in the service if needed
+    _mbtilesService.initializeGlobalLayerSelectionsIfNeeded(_layerDescriptions.keys);
   }
 
   Future<void> _downloadAndProcessMBTilesFile() async {
@@ -167,15 +151,13 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
       print('Saving to: $saveLocation');
 
       // Compile the list of layers to remove
-      // If entry.value is false (unchecked in "Configure Layers to Keep" dialog),
-      // it means the user wants to REMOVE this layer.
-      final List<String> layersToActuallyRemove = _layersToKeep.entries
-          .where((entry) => !entry.value) // Inverted logic: if not kept, then remove.
+      final List<String> layersToActuallyRemove = _mbtilesService.globalLayersToKeepSelection.entries
+          .where((entry) => !entry.value) // If not kept, then remove.
           .map((entry) => entry.key)
           .toList();
 
-      print('Layers selected for KEEPING: ${_layersToKeep.entries.where((e) => e.value).map((e) => e.key).toList()}');
-      print('Layers to be REMOVED (derived): $layersToActuallyRemove');
+      print('Layers selected for KEEPING (global): ${_mbtilesService.globalLayersToKeepSelection.entries.where((e) => e.value).map((e) => e.key).toList()}');
+      print('Layers to be REMOVED (derived from global): $layersToActuallyRemove');
 
       final processedFilePath = await _mbtilesService.processMBTiles(
         downloadedFilePath,
@@ -308,10 +290,11 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('Configure Layers to Keep'),
+              title: const Text('Choose Layers to Keep'),
               content: SingleChildScrollView(
                 child: ListBody(
-                  children: _layersToKeep.keys.map((String layerName) {
+                  // Iterate over the layer descriptions to maintain order and all available layers
+                  children: _layerDescriptions.keys.map((String layerName) {
                     return CheckboxListTile(
                       title: Text(layerName
                           .replaceAll('_', ' ')
@@ -319,16 +302,17 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
                           .map((e) => e[0].toUpperCase() + e.substring(1))
                           .join(' ')), // Prettify name
                       subtitle: Text(_layerDescriptions[layerName] ?? 'No description available.'),
-                      value: _layersToKeep[layerName],
+                      // Read value from the service
+                      value: _mbtilesService.globalLayersToKeepSelection[layerName] ?? true, // Default to true if not found
                       onChanged: (bool? value) {
-                        setDialogState(() {
-                          _layersToKeep[layerName] = value ?? true; // Default to true if null
-                        });
-                        // Update the main screen state to reflect changes
-                        setState(() {
-                          _layersToKeep[layerName] = value ?? true; // Default to true if null
-                        });
-                        print("Layer $layerName selected for KEEPING: ${_layersToKeep[layerName]}");
+                        final bool newValue = value ?? true; // Default to true if null
+                        // Update the service's state
+                        _mbtilesService.setGlobalLayerKeepSelection(layerName, newValue);
+                        // Update the dialog's state
+                        setDialogState(() {});
+                        // Update the main screen's state if necessary (though direct read from service is better)
+                        setState(() {});
+                        print("Layer $layerName selected for KEEPING (global): $newValue");
                       },
                     );
                   }).toList(),
