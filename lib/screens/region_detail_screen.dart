@@ -26,46 +26,34 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
   // State for layer visibility - using a Map to store visibility for each layer
   // true means the layer IS selected for REMOVAL
   // false means the layer is NOT selected for removal (i.e., it will be KEPT)
-  Map<String, bool> _layerVisibility = {
-    'addresses': false, // Default to false (keep layer)
-    'aerialways': false,
-    'boundaries': false,
-    'boundary_labels': false,
-    'buildings': false,
-    'dam_lines': false,
-    'ferries': false,
-    'ocean': false,
-    'pier_lines': false,
-    'pier_polygons': false,
-    'place_labels': false,
-    'public_transport': false,
-    'street_polygons': false,
-    'street_labels_points': false,
-    'streets_polygons_labels': false,
-    'sites': false,
-    'water_lines_labels': false,
-    'water_polygons_labels': false,
-  };
+  late Map<String, bool> _layerVisibility; // Initialized in initState
 
-  // Descriptions for layers
+  // Descriptions for layers - this defines all layers that can be configured
   final Map<String, String> _layerDescriptions = {
     'addresses': 'Individual address points.',
     'aerialways': 'Cable cars, ski lifts, etc.',
     'boundaries': 'Administrative and other boundaries.',
     'boundary_labels': 'Labels for boundaries.',
+    'bridges': 'Bridge structures.', // Added
     'buildings': 'Building footprints.',
     'dam_lines': 'Lines representing dams.',
     'ferries': 'Ferry routes.',
+    'land': 'General land use areas.', // Added
     'ocean': 'Areas representing oceans.',
     'pier_lines': 'Lines representing piers.',
     'pier_polygons': 'Polygons representing piers.',
     'place_labels': 'Labels for cities, towns, and other places.',
+    'pois': 'Points of Interest.', // Added
     'public_transport': 'Public transport routes and stops.',
-    'street_polygons': 'Polygons representing streets (e.g., pedestrian areas).',
+    'sites': 'Various site polygons (e.g., parks, industrial areas).', // Moved for alphabetical consistency
+    'street_labels': 'General labels for streets.', // Added
     'street_labels_points': 'Point labels for streets.',
+    'street_polygons': 'Polygons representing streets (e.g., pedestrian areas).',
+    'streets': 'Street centerlines.', // Added
     'streets_polygons_labels': 'Labels for street polygons.',
-    'sites': 'Various site polygons (e.g., parks, industrial areas).',
+    'water_lines': 'Lines representing rivers, streams, etc.', // Added
     'water_lines_labels': 'Labels for water lines (rivers, streams).',
+    'water_polygons': 'Polygons representing lakes, reservoirs, etc.', // Added
     'water_polygons_labels': 'Labels for water polygons (lakes, reservoirs).',
   };
 
@@ -73,6 +61,17 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
   void initState() {
     super.initState();
     _currentRegion = widget.region;
+    _initializeLayerVisibility();
+  }
+
+  void _initializeLayerVisibility() {
+    _layerVisibility = {};
+    // MBTilesService.layersToRemove contains layers that should be pre-selected for removal (value: true)
+    const defaultLayersToRemove = MBTilesService.layersToRemove;
+
+    for (final layerName in _layerDescriptions.keys) {
+      _layerVisibility[layerName] = defaultLayersToRemove.contains(layerName);
+    }
   }
 
   Future<void> _downloadAndProcessMBTilesFile() async {
@@ -150,8 +149,7 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
           const SnackBar(content: Text('File saving cancelled')),
         );
 
-        // Clean up downloaded file
-        await _downloadService.deleteFile(downloadedFilePath);
+        // User cancelled save, downloaded file will be cleaned up on dispose or next app start.
         return;
       }
 
@@ -202,8 +200,7 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
         ),
       );
 
-      // Clean up downloaded file
-      await _downloadService.deleteFile(downloadedFilePath);
+      // Downloaded file will be cleaned up on dispose or next app start.
     } catch (e) {
       print('Error processing or saving MBTiles: $e');
 
@@ -215,8 +212,7 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
         SnackBar(content: Text('Processing failed: ${e.toString()}')),
       );
 
-      // Clean up downloaded file
-      await _downloadService.deleteFile(downloadedFilePath);
+      // Downloaded file will be cleaned up on dispose or next app start.
     }
   }
 

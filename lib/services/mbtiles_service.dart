@@ -66,6 +66,7 @@ class MBTilesService {
     List<String>? dynamicLayersToRemove, // Optional parameter for dynamic layers
     void Function(double progress)? onProgress, // Callback for progress updates
   }) async {
+    final Set<String> encounteredLayerNames = {}; // To store unique layer names
     // Initialize SQLite
     if (Platform.isWindows || Platform.isLinux) {
       sqfliteFfiInit();
@@ -122,7 +123,7 @@ class MBTilesService {
 
           try {
             // Pass the dynamic list of layers to remove to _processTileData
-            final processedData = await _processTileData(tileData, dynamicLayersToRemove);
+            final processedData = await _processTileData(tileData, encounteredLayerNames, dynamicLayersToRemove);
 
             // Only update if the tile was modified
             if (processedData != null) {
@@ -156,6 +157,7 @@ class MBTilesService {
         onProgress(1.0); // Ensure completion is reported
       }
       print('Processed $processedCount tiles, modified $modifiedCount tiles');
+      print('Encountered layer types: ${encounteredLayerNames.toList()..sort()}');
 
       // Close the database
       await db.close();
@@ -188,7 +190,11 @@ class MBTilesService {
   }
 
   /// Process an individual tile by removing specified layers
-  Future<Uint8List?> _processTileData(Uint8List tileData, [List<String>? currentLayersToRemove]) async {
+  Future<Uint8List?> _processTileData(
+    Uint8List tileData,
+    Set<String> encounteredLayerNames, [
+    List<String>? currentLayersToRemove,
+  ]) async {
     if (tileData.isEmpty) {
       return null;
     }
@@ -219,6 +225,8 @@ class MBTilesService {
       final filteredLayers = <Tile_Layer>[];
 
       for (final layer in tile.layers) {
+        encounteredLayerNames.add(layer.name); // Collect layer name
+
         if (!effectiveLayersToRemove.contains(layer.name)) {
           if (layer.name == 'streets') {
             // if this is a street layer, we want to filter out some of the streets
