@@ -156,8 +156,6 @@ class MBTilesService {
       // Delete the temporary file
       await File(tempFilePath).delete();
 
-      print('Street kinds: $streetKinds');
-
       return outputFilePath;
     } catch (e) {
       print('Error processing MBTiles: $e');
