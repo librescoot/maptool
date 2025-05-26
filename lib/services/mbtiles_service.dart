@@ -197,6 +197,11 @@ class MBTilesService {
       print('Processed $processedCount tiles, modified $modifiedCount tiles');
       print('Encountered layer types: ${encounteredLayerNames.toList()..sort()}');
 
+      // Run VACUUM to reclaim space from removed layers
+      print('Running VACUUM to optimize database size...');
+      await db.execute('VACUUM');
+      print('VACUUM completed');
+
       // Close the database
       await db.close();
       db = null;
