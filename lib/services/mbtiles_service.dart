@@ -1,338 +1,300 @@
 import 'dart:io';
-import 'dart:typed_data';
+import 'dart:isolate'; // Required for Isolate.current.debugName
+
 import 'package:archive/archive.dart';
-import 'package:flutter/foundation.dart';
-import 'package:path/path.dart' as path;
+import 'package:flutter/foundation.dart'; // Required for compute
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
-import '../models/vector_tile.dart'; // This now imports the generated protobuf file
+
+import '../models/vector_tile.dart';
+
+// Helper class for passing arguments to the isolate for tile processing.
+class _TileProcessingArgs {
+  final Uint8List tileData;
+  final List<String> effectiveLayersToRemove;
+
+  _TileProcessingArgs(this.tileData, this.effectiveLayersToRemove);
+}
+
+// Helper class for returning results from isolate-based tile processing.
+class _TileProcessingResult {
+  final Uint8List? processedData;
+  final bool modified;
+
+  _TileProcessingResult(this.processedData, this.modified);
+}
+
+// This top-level function will run in an isolate
+Future<_TileProcessingResult> _processTileDataIsolate(_TileProcessingArgs args) async {
+  bool modified = false;
+
+  if (args.tileData.isEmpty) {
+    return _TileProcessingResult(null, modified);
+  }
+
+  try {
+    List<int> decompressedData;
+    try {
+      decompressedData = const GZipDecoder().decodeBytes(args.tileData);
+    } catch (e) {
+      print('Isolate ${Isolate.current.debugName}: Error decompressing tile data: $e');
+      return _TileProcessingResult(null, modified);
+    }
+
+    Tile tile;
+    try {
+      tile = Tile.fromBuffer(decompressedData);
+    } catch (e) {
+      print('Isolate ${Isolate.current.debugName}: Error parsing tile protobuf: $e');
+      return _TileProcessingResult(null, modified);
+    }
+
+    final filteredLayers = <Tile_Layer>[];
+    for (final layer in tile.layers) {
+      if (!args.effectiveLayersToRemove.contains(layer.name)) {
+        if (layer.name == 'streets') {
+          final List<Tile_Feature> filteredFeatures = [];
+          features:
+          for (final feature in layer.features) {
+            for (int i = 0; i < feature.tags.length; i += 2) {
+              if (i + 1 < feature.tags.length) {
+                final keyIndex = feature.tags[i];
+                final valueIndex = feature.tags[i + 1];
+                if (keyIndex < layer.keys.length && valueIndex < layer.values.length) {
+                  final key = layer.keys[keyIndex];
+                  final value = layer.values[valueIndex];
+                  if (key == 'kind' && !MBTilesService.streetsToKeep.contains(value.stringValue)) {
+                    continue features;
+                  }
+                }
+              }
+            }
+            filteredFeatures.add(feature);
+          }
+          if (layer.features.length != filteredFeatures.length) {
+            modified = true; // Features were removed from this layer
+          }
+          layer.features.clear();
+          layer.features.addAll(filteredFeatures);
+        }
+        filteredLayers.add(layer);
+      } else {
+        modified = true;
+        // print('Isolate ${Isolate.current.debugName}: Removing layer: ${layer.name}');
+      }
+    }
+
+    if (!modified) {
+      return _TileProcessingResult(null, false);
+    }
+
+    final newTile = Tile()
+      ..layers.clear()
+      ..layers.addAll(filteredLayers);
+
+    final serializedData = newTile.writeToBuffer();
+    final compressedData = const GZipEncoder().encode(serializedData);
+
+    return _TileProcessingResult(Uint8List.fromList(compressedData), true);
+  } catch (e) {
+    print('Isolate ${Isolate.current.debugName}: Error processing vector tile: $e');
+    return _TileProcessingResult(null, modified); // return what we have
+  }
+}
 
 class MBTilesService {
-  // This list now defines layers that are NOT kept by default when global settings are first initialized.
   static const List<String> defaultLayersToNotKeep = [
-    'addresses',
-    'aerialways',
-    'boundaries',
-    'boundary_labels',
-    'bridges',
-    'buildings',
-    'dam_lines',
-    'ferries',
-    'ocean',
-    'pier_lines',
-    'pier_polygons',
-    'place_labels',
-    'pois',
-    'public_transport',
-    'street_polygons',
-    'street_labels_points',
-    'streets_polygons_labels',
-    'sites',
-    'water_lines',
-    'water_lines_labels',
-    'water_polygons_labels',
+    'addresses', 'aerialways', 'boundaries', 'boundary_labels', 'bridges',
+    'buildings', 'dam_lines', 'ferries', 'ocean', 'pier_lines', 'pier_polygons',
+    'place_labels', 'pois', 'public_transport', 'street_polygons',
+    'street_labels_points', 'streets_polygons_labels', 'sites', 'water_lines',
+    'water_lines_labels', 'water_polygons_labels',
   ];
 
-  // Static global state for layer selection. True means keep, false means remove.
-  static Map<String, bool>? _staticGlobalLayersToKeepSelection;
-
-  // Public getter for the selection
-  // Now accesses the static variable.
-  Map<String, bool> get globalLayersToKeepSelection {
-    if (_staticGlobalLayersToKeepSelection == null) {
-      // This should ideally not happen if initializeGlobalLayerSelectionsIfNeeded is called correctly.
-      print("Warning: globalLayersToKeepSelection accessed before static initialization. Initializing with empty map.");
-      _staticGlobalLayersToKeepSelection = {};
-    }
-    return _staticGlobalLayersToKeepSelection!;
-  }
-
-  // Method to initialize or update a specific layer's selection
-  // Now updates the static variable.
-  void setGlobalLayerKeepSelection(String layerName, bool shouldKeep) {
-    _staticGlobalLayersToKeepSelection ??= {};
-    _staticGlobalLayersToKeepSelection![layerName] = shouldKeep;
-  }
-
-  // Initializes the global selection if it hasn't been done yet.
-  // Takes all available layer names to set up the initial state.
-  // Now checks and initializes the static variable.
-  void initializeGlobalLayerSelectionsIfNeeded(Iterable<String> allAvailableLayerNames) {
-    if (_staticGlobalLayersToKeepSelection == null) {
-      _staticGlobalLayersToKeepSelection = {};
-      for (final layerName in allAvailableLayerNames) {
-        // If a layer is in defaultLayersToNotKeep, it should NOT be kept by default (false).
-        // Otherwise, it SHOULD be kept by default (true).
-        _staticGlobalLayersToKeepSelection![layerName] = !defaultLayersToNotKeep.contains(layerName);
-      }
-      print("Global layer selections initialized (static): $_staticGlobalLayersToKeepSelection");
-    }
-  }
-
-
-  static const Set<String> streetsToKeep = {
-    'track',
-    'path',
-    'service',
-    'unclassified',
-    'residential',
-    'tertiary',
-    'secondary',
-    'primary',
-    'trunk',
-    'living_street',
-    'pedestrian',
-    'taxiway',
-    'busway',
-
-    // "footway",
-    // "motorway",
-    // "rail",
-    // "subway",
-    // "light_rail",
-    // "tram",
-    // "narrow_gauge",
-    // "cycleway",
-    // "steps",
+  static final Map<String, String> layerDescriptions = {
+    'addresses': 'Individual address points.',
+    'aerialways': 'Cable cars, ski lifts, etc.',
+    'boundaries': 'Administrative and other boundaries.',
+    'boundary_labels': 'Labels for boundaries.',
+    'bridges': 'Bridge structures.',
+    'buildings': 'Building footprints.',
+    'dam_lines': 'Lines representing dams.',
+    'ferries': 'Ferry routes.',
+    'land': 'General land use areas.',
+    'ocean': 'Areas representing oceans.',
+    'pier_lines': 'Lines representing piers.',
+    'pier_polygons': 'Polygons representing piers.',
+    'place_labels': 'Labels for cities, towns, and other places.',
+    'pois': 'Points of Interest.',
+    'public_transport': 'Public transport routes and stops.',
+    'sites': 'Various site polygons (e.g., parks, industrial areas).',
+    'streets': 'Street centerlines.',
+    'street_labels': 'General labels for streets.',
+    'street_labels_points': 'Point labels for streets.',
+    'street_polygons': 'Polygons representing streets (e.g., pedestrian areas).',
+    'streets_polygons_labels': 'Labels for street polygons.',
+    'water_lines': 'Lines representing rivers, streams, etc.',
+    'water_lines_labels': 'Labels for water lines (rivers, streams).',
+    'water_polygons': 'Polygons representing lakes, reservoirs, etc.',
+    'water_polygons_labels': 'Labels for water polygons (lakes, reservoirs).',
   };
 
-  /// Processes an MBTiles file by removing specified layers
-  /// Returns the path to the processed file
+  // Public getter for layer descriptions
+  static Map<String, String> get publicLayerDescriptions => layerDescriptions;
+
+  // Define all known layer names based on the layerDescriptions map
+  static final List<String> _allKnownLayerNames = layerDescriptions.keys.toList();
+
+  // This map stores the user's preference for keeping (true) or removing (false) each layer
+  static final Map<String, bool> _staticGlobalLayersToKeepSelection =
+      Map.fromEntries(
+    _allKnownLayerNames.map(
+      (layerName) => MapEntry(
+        layerName,
+        !defaultLayersToNotKeep.contains(layerName),
+      ),
+    ),
+  );
+
+  Map<String, bool> get globalLayersToKeepSelection {
+    return _staticGlobalLayersToKeepSelection;
+  }
+
+  void setGlobalLayerKeepSelection(String layerName, bool shouldKeep) {
+    if (_staticGlobalLayersToKeepSelection.containsKey(layerName)) {
+      _staticGlobalLayersToKeepSelection[layerName] = shouldKeep;
+    } else {
+      print("Warning: Attempted to set selection for unknown layer: $layerName");
+    }
+  }
+
+  static const Set<String> streetsToKeep = {
+    'track', 'path', 'service', 'unclassified', 'residential', 'tertiary',
+    'secondary', 'primary', 'trunk', 'living_street', 'pedestrian', 'taxiway', 'busway',
+  };
+
   Future<String> processMBTiles(
     String inputFilePath,
     String outputFilePath, {
-    List<String>? dynamicLayersToRemove, // Optional parameter for dynamic layers
-    void Function(double progress)? onProgress, // Callback for progress updates
+    List<String>? dynamicLayersToRemove,
+    void Function(double progress)? onProgress,
   }) async {
-    final Set<String> encounteredLayerNames = {}; // To store unique layer names
-    // Initialize SQLite
     if (Platform.isWindows || Platform.isLinux) {
       sqfliteFfiInit();
       databaseFactory = databaseFactoryFfi;
     }
 
-    // Copy the file first to preserve the original
-    final tempFilePath = inputFilePath + '.temp';
+    final tempFilePath = '$inputFilePath.temp';
     final inputFile = File(inputFilePath);
     await inputFile.copy(tempFilePath);
 
-    // Open the database
     Database? db;
     try {
       db = await openDatabase(tempFilePath);
-
-      // Check if it's a valid MBTiles file
-      final tables = await db.query('sqlite_master',
-          columns: ['name'], where: "type = 'table' AND name = 'tiles'");
-
+      final tables = await db.query('sqlite_master', columns: ['name'], where: "type = 'table' AND name = 'tiles'");
       if (tables.isEmpty) {
         throw Exception('Not a valid MBTiles file (missing tiles table)');
       }
 
-      // Get the count of tiles
-      final countResult =
-          await db.rawQuery('SELECT COUNT(*) as count FROM tiles');
+      final countResult = await db.rawQuery('SELECT COUNT(*) as count FROM tiles');
       final tileCount = Sqflite.firstIntValue(countResult) ?? 0;
-
       print('Processing $tileCount tiles...');
 
-      // Process tiles in batches to avoid memory issues
-      const batchSize = 100;
-      int processedCount = 0;
-      int modifiedCount = 0;
+      const batchSize = 100; // DB read batch size
+      int processedTilesInLoop = 0;
+      int totalModifiedTiles = 0;
+
+      final effectiveLayersToRemove = dynamicLayersToRemove ??
+          _staticGlobalLayersToKeepSelection.entries
+              .where((entry) => !entry.value) // Find layers marked not to keep
+              .map((entry) => entry.key)
+              .toList();
 
       for (int i = 0; i < tileCount; i += batchSize) {
-        final tiles = await db.query(
+        final tilesData = await db.query(
           'tiles',
           columns: ['zoom_level', 'tile_column', 'tile_row', 'tile_data'],
           limit: batchSize,
           offset: i,
         );
 
+        if (tilesData.isEmpty) break;
+
+        List<Future<_TileProcessingResult>> processingFutures = [];
+        for (final tileMap in tilesData) {
+          final tileData = tileMap['tile_data'] as Uint8List;
+          final args = _TileProcessingArgs(tileData, effectiveLayersToRemove);
+          processingFutures.add(compute(_processTileDataIsolate, args));
+        }
+
+        final List<_TileProcessingResult> results = await Future.wait(processingFutures);
+        
         final batch = db.batch();
+        int currentBatchModifiedCount = 0;
 
-        for (final tile in tiles) {
-          processedCount++;
+        for (int j = 0; j < results.length; j++) {
+          processedTilesInLoop++;
+          final result = results[j];
 
-          final zoomLevel = tile['zoom_level'] as int;
-          final tileColumn = tile['tile_column'] as int;
-          final tileRow = tile['tile_row'] as int;
-          final tileData = tile['tile_data'] as Uint8List;
-
-          try {
-            // Pass the dynamic list of layers to remove to _processTileData
-            final processedData = await _processTileData(tileData, encounteredLayerNames, dynamicLayersToRemove);
-
-            // Only update if the tile was modified
-            if (processedData != null) {
-              batch.update(
-                'tiles',
-                {'tile_data': processedData},
-                where: 'zoom_level = ? AND tile_column = ? AND tile_row = ?',
-                whereArgs: [zoomLevel, tileColumn, tileRow],
-              );
-              modifiedCount++;
-            }
-          } catch (e) {
-            print(
-                'Error processing tile at z=$zoomLevel, x=$tileColumn, y=$tileRow: $e');
-          }
-
-          // Provide progress updates
-          if (onProgress != null) {
-            final progress = tileCount > 0 ? processedCount / tileCount : 0.0;
-            onProgress(progress);
-          } else if (processedCount % 100 == 0) { // Fallback to console logging if no callback
-            print(
-                'Processed $processedCount / $tileCount tiles, modified $modifiedCount tiles');
+          if (result.modified && result.processedData != null) {
+            final originalTileInfo = tilesData[j];
+            batch.update(
+              'tiles',
+              {'tile_data': result.processedData},
+              where: 'zoom_level = ? AND tile_column = ? AND tile_row = ?',
+              whereArgs: [
+                originalTileInfo['zoom_level'] as int,
+                originalTileInfo['tile_column'] as int,
+                originalTileInfo['tile_row'] as int
+              ],
+            );
+            currentBatchModifiedCount++;
           }
         }
 
-        await batch.commit();
+        if (currentBatchModifiedCount > 0) {
+          await batch.commit(noResult: true);
+          totalModifiedTiles += currentBatchModifiedCount;
+        }
+
+
+        if (onProgress != null) {
+          final progress = tileCount > 0 ? processedTilesInLoop / tileCount : 0.0;
+          onProgress(progress);
+        } else if (processedTilesInLoop % (batchSize * 5) == 0 || processedTilesInLoop == tileCount) { // Log less frequently
+          print('Processed $processedTilesInLoop / $tileCount tiles, total modified $totalModifiedTiles tiles');
+        }
       }
 
       if (onProgress != null) {
-        onProgress(1.0); // Ensure completion is reported
+        onProgress(1.0);
       }
-      print('Processed $processedCount tiles, modified $modifiedCount tiles');
-      print('Encountered layer types: ${encounteredLayerNames.toList()..sort()}');
+      print('Finished processing. Processed $processedTilesInLoop tiles, total modified $totalModifiedTiles tiles.');
 
-      // Run VACUUM to reclaim space from removed layers
       print('Running VACUUM to optimize database size...');
       await db.execute('VACUUM');
       print('VACUUM completed');
 
-      // Close the database
       await db.close();
       db = null;
 
-      // Copy the processed file to the output location
       await File(tempFilePath).copy(outputFilePath);
-
-      // Delete the temporary file
       await File(tempFilePath).delete();
 
       return outputFilePath;
     } catch (e) {
       print('Error processing MBTiles: $e');
-      // Clean up
-      if (db != null) {
+      if (db != null && db.isOpen) {
         await db.close();
       }
-
       try {
         if (await File(tempFilePath).exists()) {
           await File(tempFilePath).delete();
         }
-      } catch (e) {
-        print('Error deleting temporary file: $e');
+      } catch (deleteError) {
+        print('Error deleting temporary file: $deleteError');
       }
-
       rethrow;
-    }
-  }
-
-  /// Process an individual tile by removing specified layers
-  Future<Uint8List?> _processTileData(
-    Uint8List tileData,
-    Set<String> encounteredLayerNames, [
-    List<String>? currentLayersToRemove,
-  ]) async {
-    if (tileData.isEmpty) {
-      return null;
-    }
-
-    final effectiveLayersToRemove = currentLayersToRemove ?? defaultLayersToNotKeep;
-
-
-    try {
-      // Decompress the tile data
-      List<int> decompressedData;
-      try {
-        decompressedData = GZipDecoder().decodeBytes(tileData);
-      } catch (e) {
-        print('Error decompressing tile data: $e');
-        return null;
-      }
-
-      // Parse the tile using generated protobuf code
-      Tile tile;
-      try {
-        tile = Tile.fromBuffer(decompressedData);
-      } catch (e) {
-        print('Error parsing tile protobuf: $e');
-        return null;
-      }
-
-      // Filter out the layers we want to remove
-      bool modified = false;
-      final filteredLayers = <Tile_Layer>[];
-
-      for (final layer in tile.layers) {
-        encounteredLayerNames.add(layer.name); // Collect layer name
-
-        if (!effectiveLayersToRemove.contains(layer.name)) {
-          if (layer.name == 'streets') {
-            // if this is a street layer, we want to filter out some of the streets
-            // that are not relevant to us.
-            final List<Tile_Feature> filteredFeatures = [];
-
-            features:
-            for (final feature in layer.features) {
-              for (int i = 0; i < feature.tags.length; i += 2) {
-                if (i + 1 < feature.tags.length) {
-                  final keyIndex = feature.tags[i];
-                  final valueIndex = feature.tags[i + 1];
-                  if (keyIndex < layer.keys.length &&
-                      valueIndex < layer.values.length) {
-                    final key = layer.keys[keyIndex];
-                    final value = layer.values[valueIndex];
-                    if (key == 'kind' &&
-                        !streetsToKeep.contains(value.stringValue)) {
-                      continue features;
-                    }
-                  }
-                }
-              }
-
-              filteredFeatures.add(feature);
-            }
-
-            layer.features.clear();
-            layer.features.addAll(filteredFeatures);
-          }
-
-          filteredLayers.add(layer);
-        } else {
-          modified = true;
-          print('Removing layer: ${layer.name}');
-        }
-      }
-
-      // If no layers were removed, return null to skip updating
-      if (!modified) {
-        return null;
-      }
-
-      // Create new tile with filtered layers
-      final newTile = Tile()
-        ..layers.clear()
-        ..layers.addAll(filteredLayers);
-
-      // Serialize the tile back to protobuf format
-      final serializedData = newTile.writeToBuffer();
-
-      // Compress with gzip
-      final compressedData = GZipEncoder().encode(serializedData);
-
-      if (compressedData == null) {
-        throw Exception('Failed to compress tile data');
-      }
-
-      return Uint8List.fromList(compressedData);
-    } catch (e) {
-      print('Error processing vector tile: $e');
-      return null;
     }
   }
 }
