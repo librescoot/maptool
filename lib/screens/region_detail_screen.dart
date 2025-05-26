@@ -23,41 +23,10 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
   double _processingProgress = 0.0; // Added for processing progress
   late Region _currentRegion;
 
-  // Descriptions for layers - this defines all layers that can be configured
-  final Map<String, String> _layerDescriptions = {
-    'addresses': 'Individual address points.',
-    'aerialways': 'Cable cars, ski lifts, etc.',
-    'boundaries': 'Administrative and other boundaries.',
-    'boundary_labels': 'Labels for boundaries.',
-    'bridges': 'Bridge structures.',
-    'buildings': 'Building footprints.',
-    'dam_lines': 'Lines representing dams.',
-    'ferries': 'Ferry routes.',
-    'land': 'General land use areas.',
-    'ocean': 'Areas representing oceans.',
-    'pier_lines': 'Lines representing piers.',
-    'pier_polygons': 'Polygons representing piers.',
-    'place_labels': 'Labels for cities, towns, and other places.',
-    'pois': 'Points of Interest.',
-    'public_transport': 'Public transport routes and stops.',
-    'sites': 'Various site polygons (e.g., parks, industrial areas).',
-    'streets': 'Street centerlines.',
-    'street_labels': 'General labels for streets.',
-    'street_labels_points': 'Point labels for streets.',
-    'street_polygons': 'Polygons representing streets (e.g., pedestrian areas).',
-    'streets_polygons_labels': 'Labels for street polygons.',
-    'water_lines': 'Lines representing rivers, streams, etc.',
-    'water_lines_labels': 'Labels for water lines (rivers, streams).',
-    'water_polygons': 'Polygons representing lakes, reservoirs, etc.',
-    'water_polygons_labels': 'Labels for water polygons (lakes, reservoirs).',
-  };
-
   @override
   void initState() {
     super.initState();
     _currentRegion = widget.region;
-    // Initialize global layer selections in the service if needed
-    _mbtilesService.initializeGlobalLayerSelectionsIfNeeded(_layerDescriptions.keys);
   }
 
   Future<void> _downloadAndProcessMBTilesFile() async {
@@ -293,15 +262,15 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
               title: const Text('Choose Layers to Keep'),
               content: SingleChildScrollView(
                 child: ListBody(
-                  // Iterate over the layer descriptions to maintain order and all available layers
-                  children: _layerDescriptions.keys.map((String layerName) {
+                  // Iterate over the layer descriptions from MBTilesService
+                  children: MBTilesService.publicLayerDescriptions.keys.map((String layerName) {
                     return CheckboxListTile(
                       title: Text(layerName
                           .replaceAll('_', ' ')
                           .split(' ')
                           .map((e) => e[0].toUpperCase() + e.substring(1))
                           .join(' ')), // Prettify name
-                      subtitle: Text(_layerDescriptions[layerName] ?? 'No description available.'),
+                      subtitle: Text(MBTilesService.publicLayerDescriptions[layerName] ?? 'No description available.'),
                       // Read value from the service
                       value: _mbtilesService.globalLayersToKeepSelection[layerName] ?? true, // Default to true if not found
                       onChanged: (bool? value) {
