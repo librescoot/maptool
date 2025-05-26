@@ -74,19 +74,19 @@ class _HomeScreenState extends State<HomeScreen> {
         bool originalExists = await originalFile.exists();
         bool processedExists = await processedFile.exists();
         RegionStatus status = RegionStatus.notDownloaded;
-        String? currentFilePath = originalExists ? originalFilePath : null;
+        // String? currentFilePath = originalExists ? originalFilePath : null; // Not used directly here
 
         if (processedExists) {
           status = RegionStatus.processed;
-          currentFilePath = processedFilePath; // This might be the processed file path
+          // currentFilePath = processedFilePath; 
         } else if (originalExists) {
           status = RegionStatus.downloaded;
         }
         
         enrichedRegions.add(
           staticRegion.copyWith(
-            filePath: originalExists ? originalFilePath : null, // Store original path if exists
-            processedFilePath: processedExists ? processedFilePath : null, // Store processed path if exists
+            filePath: originalExists ? originalFilePath : null,
+            processedFilePath: processedExists ? processedFilePath : null,
             status: status,
             progress: (status == RegionStatus.downloaded || status == RegionStatus.processed) ? 1.0 : 0.0,
           )
@@ -124,7 +124,7 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.list_alt_outlined),
-            onPressed: () => _showProfileEditor(context),
+            onPressed: () => _showManageProfilesDialog(context), // Updated Call
             tooltip: 'Manage Profiles',
           ),
           IconButton(
@@ -191,8 +191,8 @@ class _HomeScreenState extends State<HomeScreen> {
         buttons.add(_buildDownloadButton(region));
         break;
       case RegionStatus.error: 
-        buttons.add(_buildDownloadButton(region)); // Allow retry
-        if (region.filePath != null || region.processedFilePath != null) { // If files exist from a previous attempt
+        buttons.add(_buildDownloadButton(region));
+        if (region.filePath != null || region.processedFilePath != null) {
           buttons.add(const SizedBox(width: 8));
           buttons.add(_buildCleanButton(region));
         }
@@ -201,7 +201,6 @@ class _HomeScreenState extends State<HomeScreen> {
         buttons.add(_buildInProgressButton(currentStatus, currentProgress, "Downloading"));
         break;
       case RegionStatus.processing:
-         // During processing, show the "Processing..." button and disable others
         buttons.add(_buildRedownloadButton(region, disabled: true));
         buttons.add(const SizedBox(width: 8));
         buttons.add(_buildCleanButton(region, disabled: true));
@@ -269,21 +268,20 @@ class _HomeScreenState extends State<HomeScreen> {
       onPressed: () => _onDownload(region),
       style: TextButton.styleFrom(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        foregroundColor: Colors.green, // Changed to green
+        foregroundColor: Colors.green,
       ),
     );
   }
 
   Widget _buildInProgressButton(RegionStatus status, double progress, String operationName) {
     bool isDeterminate = progress > 0 && progress < 1;
-    return TextButton.icon( // Changed from OutlinedButton to TextButton
+    return TextButton.icon(
       icon: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, value: isDeterminate ? progress : null)),
       label: Text('$operationName ${isDeterminate ? (progress * 100).toStringAsFixed(0) + '%' : ''}'),
       onPressed: null, 
       style: TextButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           disabledForegroundColor: Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.7),
-          // Match the foreground color of the original download button if needed, or keep default
           foregroundColor: status == RegionStatus.downloading ? Colors.green : Theme.of(context).colorScheme.primary,
       ),
     );
@@ -332,7 +330,7 @@ class _HomeScreenState extends State<HomeScreen> {
       enabled: !disabled,
       onSelected: (String value) {
         if (value == 'manage_profiles') {
-          _showProfileEditor(context);
+          _showManageProfilesDialog(context); // Updated Call
         } else {
           final selectedProfile = _profiles.firstWhere((p) => p.id == value, orElse: () => _defaultProfile!);
           _onProcess(region, selectedProfile);
@@ -377,7 +375,6 @@ class _HomeScreenState extends State<HomeScreen> {
           if (mounted) {
             setState(() {
               _operationProgress[region.name] = progress;
-               // Keep status as downloading, only update progress
               _updateRegionInList(region.copyWith(progress: progress, status: RegionStatus.downloading));
             });
           }
@@ -427,15 +424,13 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
       
-      // After deleting, the region should be back to notDownloaded state
-      // and file paths should be cleared.
       final updatedRegion = region.copyWith(
         status: RegionStatus.notDownloaded,
         filePath: null, 
         processedFilePath: null,
         progress: 0.0,
         errorMessage: null,
-        clearErrorMessage: true // This will clear any existing error message
+        clearErrorMessage: true
       );
       _updateRegionInList(updatedRegion);
       
@@ -469,11 +464,11 @@ class _HomeScreenState extends State<HomeScreen> {
     profileToUse ??= _defaultProfile;
 
     if (profileToUse == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No profile available for processing.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No profile available for processing. Please create or set a default profile.')));
       final loadedDefaultProfile = await _dbService.getDefaultProfile(); 
         if (mounted) setState(() => _defaultProfile = loadedDefaultProfile);
         if (loadedDefaultProfile == null) {
-           _showProfileEditor(context); 
+           _showManageProfilesDialog(context); // Updated Call
            return;
         }
         profileToUse = loadedDefaultProfile;
@@ -551,7 +546,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _showProfileEditor(BuildContext context, [Profile? existingProfile]) async {
+  // Renamed from _showProfileEditor
+  Future<void> _showEditProfileDialog(BuildContext context, [Profile? existingProfile]) async {
     final formKey = GlobalKey<FormState>();
     String profileName = existingProfile?.name ?? '';
     Map<String, bool> layerSelections = {};
@@ -575,9 +571,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return showDialog<void>(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: false, // Prevent dismissing by tapping outside
       builder: (BuildContext dialogContext) {
-        return StatefulBuilder(
+        return StatefulBuilder( // Needed for updating state within the dialog (e.g. checkboxes)
           builder: (context, setDialogState) {
             return AlertDialog(
               title: Text(existingProfile == null ? 'Create New Profile' : 'Edit Profile "${existingProfile.name}"'),
@@ -591,6 +587,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         decoration: const InputDecoration(labelText: 'Profile Name', border: OutlineInputBorder()),
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) return 'Profile name cannot be empty';
+                          // Check for uniqueness only if name changed or it's a new profile
                           if (_profiles.any((p) => p.name.toLowerCase() == value.trim().toLowerCase() && p.id != originalProfileId)) {
                             return 'Profile name already exists';
                           }
@@ -602,8 +599,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       Text('Layers to Keep:', style: Theme.of(context).textTheme.titleMedium),
                       const SizedBox(height: 8),
                       SizedBox(
-                        height: MediaQuery.of(context).size.height * 0.35,
-                        width: MediaQuery.of(context).size.width * 0.8, 
+                        height: MediaQuery.of(context).size.height * 0.35, // Constrain height
+                        width: MediaQuery.of(context).size.width * 0.8, // Constrain width
                         child: Container(
                           decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(4)),
                           child: ListView.builder(
@@ -651,21 +648,131 @@ class _HomeScreenState extends State<HomeScreen> {
                         await _dbService.insertProfile(profileToSave);
                       }
 
+                      // Handle default profile logic
                       if (isDefault && (existingProfile == null || !originalIsDefault || existingProfile.id != profileToSave.id)) {
                         await _dbService.setDefaultProfile(profileToSave.id);
                       } else if (!isDefault && originalIsDefault) {
+                         // If this was the default and is no longer, ensure another default exists or make this one default again if it's the only one.
                          final otherDefaults = await _dbService.getAllProfiles().then((list) => list.where((p) => p.isDefault && p.id != profileToSave.id));
-                         if(otherDefaults.isEmpty && _profiles.length > 1) { 
-                            if (_profiles.length == 1 && _profiles.first.id == profileToSave.id) {
+                         if(otherDefaults.isEmpty) { 
+                            // If unsetting default leaves no default, and there are profiles, re-set this one or the first one.
+                            // For simplicity, if it's the only profile, it must be default.
+                            final allProfilesAfterSave = await _dbService.getAllProfiles();
+                            if (allProfilesAfterSave.length == 1 && allProfilesAfterSave.first.id == profileToSave.id) {
                                 await _dbService.setDefaultProfile(profileToSave.id);
+                            } else if (allProfilesAfterSave.isNotEmpty && allProfilesAfterSave.first.id != profileToSave.id) {
+                                // If there are other profiles, make the first one default (or implement more complex logic)
+                                // For now, let's ensure *this* one becomes default if it was the only one being made non-default
+                                // and no other default was set. This logic might need refinement based on desired UX.
+                                // A simpler approach: if unsetting default and no other default exists, re-set this one.
+                                await _dbService.setDefaultProfile(profileToSave.id); 
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('"${profileToSave.name}" was kept as default as it is the only profile or no other default was set.'))
+                                );
+                            } else if (allProfilesAfterSave.isEmpty) {
+                                // This case should ideally not happen if we ensure one default always.
+                                // But if it does, the next ensureValidDefaultProfile will handle it.
                             }
                          }
                       }
                       
-                      await _loadInitialData();
-                      Navigator.of(dialogContext).pop();
+                      await _loadInitialData(); // Reload all data to reflect changes
+                      Navigator.of(dialogContext).pop(); // Close the edit/create dialog
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Profile "${profileToSave.name}" saved.')));
                     }
+                  },
+                ),
+              ],
+            );
+          }
+        );
+      },
+    );
+  }
+
+  // New dialog to manage all profiles
+  Future<void> _showManageProfilesDialog(BuildContext context) async {
+    return showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        // Use a StatefulBuilder to allow updating the list after delete/edit
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Manage Profiles'),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: _profiles.isEmpty
+                    ? const Center(child: Text('No profiles created yet.'))
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: _profiles.length,
+                        itemBuilder: (context, index) {
+                          final profile = _profiles[index];
+                          return ListTile(
+                            title: Text(profile.name + (profile.isDefault ? ' (Default)' : '')),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.edit, color: Colors.blue),
+                                  tooltip: 'Edit ${profile.name}',
+                                  onPressed: () async {
+                                    Navigator.of(dialogContext).pop(); // Close manage dialog first
+                                    await _showEditProfileDialog(this.context, profile); // Show edit dialog
+                                    // No need to call _loadInitialData here as _showEditProfileDialog does it.
+                                    // setDialogState(() {}); // Refresh the list in manage dialog if it were still open
+                                  },
+                                ),
+                                IconButton(
+                                  icon: Icon(Icons.delete, color: Colors.red.shade700),
+                                  tooltip: 'Delete ${profile.name}',
+                                  onPressed: () async {
+                                    final confirmDelete = await showDialog<bool>(
+                                      context: this.context, // Use the main screen's context for confirmation
+                                      builder: (BuildContext confirmDialogContext) => AlertDialog(
+                                        title: Text('Delete Profile "${profile.name}"?'),
+                                        content: const Text('This action cannot be undone.'),
+                                        actions: [
+                                          TextButton(onPressed: () => Navigator.of(confirmDialogContext).pop(false), child: const Text('Cancel')),
+                                          TextButton(
+                                            onPressed: () => Navigator.of(confirmDialogContext).pop(true),
+                                            child: Text('Delete', style: TextStyle(color: Colors.red.shade700)),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+
+                                    if (confirmDelete == true) {
+                                      await _dbService.deleteProfile(profile.id);
+                                      await _dbService.ensureValidDefaultProfile(); // Ensure a default profile exists
+                                      await _loadInitialData(); // Reload data
+                                      // If the manage dialog is still open (which it won't be due to pop above), refresh its state
+                                      // For now, we assume it's closed and reopened if needed.
+                                      // To refresh this specific dialog if it were kept open:
+                                      setDialogState(() {}); 
+                                      ScaffoldMessenger.of(this.context).showSnackBar(SnackBar(content: Text('Profile "${profile.name}" deleted.')));
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  child: const Text('Close'),
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                ),
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add New Profile'),
+                  onPressed: () async {
+                     Navigator.of(dialogContext).pop(); // Close manage dialog
+                    await _showEditProfileDialog(this.context); // Show create dialog
+                    // _loadInitialData is called within _showEditProfileDialog on save
                   },
                 ),
               ],
