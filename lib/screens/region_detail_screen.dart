@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+
 import '../models/region.dart';
 import '../services/download_service.dart';
 import '../services/mbtiles_service.dart';
@@ -19,7 +20,54 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
   bool _isDownloading = false;
   bool _isProcessing = false;
   double _downloadProgress = 0.0;
+  double _processingProgress = 0.0; // Added for processing progress
   late Region _currentRegion;
+
+  // State for layer visibility - using a Map to store visibility for each layer
+  // true means the layer IS selected for REMOVAL
+  // false means the layer is NOT selected for removal (i.e., it will be KEPT)
+  Map<String, bool> _layerVisibility = {
+    'addresses': false, // Default to false (keep layer)
+    'aerialways': false,
+    'boundaries': false,
+    'boundary_labels': false,
+    'buildings': false,
+    'dam_lines': false,
+    'ferries': false,
+    'ocean': false,
+    'pier_lines': false,
+    'pier_polygons': false,
+    'place_labels': false,
+    'public_transport': false,
+    'street_polygons': false,
+    'street_labels_points': false,
+    'streets_polygons_labels': false,
+    'sites': false,
+    'water_lines_labels': false,
+    'water_polygons_labels': false,
+  };
+
+  // Descriptions for layers
+  final Map<String, String> _layerDescriptions = {
+    'addresses': 'Individual address points.',
+    'aerialways': 'Cable cars, ski lifts, etc.',
+    'boundaries': 'Administrative and other boundaries.',
+    'boundary_labels': 'Labels for boundaries.',
+    'buildings': 'Building footprints.',
+    'dam_lines': 'Lines representing dams.',
+    'ferries': 'Ferry routes.',
+    'ocean': 'Areas representing oceans.',
+    'pier_lines': 'Lines representing piers.',
+    'pier_polygons': 'Polygons representing piers.',
+    'place_labels': 'Labels for cities, towns, and other places.',
+    'public_transport': 'Public transport routes and stops.',
+    'street_polygons': 'Polygons representing streets (e.g., pedestrian areas).',
+    'street_labels_points': 'Point labels for streets.',
+    'streets_polygons_labels': 'Labels for street polygons.',
+    'sites': 'Various site polygons (e.g., parks, industrial areas).',
+    'water_lines_labels': 'Labels for water lines (rivers, streams).',
+    'water_polygons_labels': 'Labels for water polygons (lakes, reservoirs).',
+  };
 
   @override
   void initState() {
@@ -37,12 +85,12 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
       // Extract filename from URL
       final url = _currentRegion.url;
       final filename = url.split('/').last;
-      
+
       print('Downloading MBTiles file from: $url');
-      
+
       // Download the file with progress tracking
       final filePath = await _downloadService.downloadFile(
-        url, 
+        url,
         filename,
         onProgress: (progress) {
           if (mounted) {
@@ -52,37 +100,35 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
           }
         },
       );
-      
+
       setState(() {
         _isDownloading = false;
         _downloadProgress = 1.0;
         _isProcessing = true;
       });
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Download complete. Starting to process...'),
           duration: Duration(seconds: 2),
         ),
       );
-      
+
       // Now ask the user where to save the processed file
       await _processAndSaveTiles(filePath);
-      
     } catch (e) {
       print('Error downloading MBTiles file: $e');
-      
+
       setState(() {
         _isDownloading = false;
         _isProcessing = false;
       });
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Download failed: ${e.toString()}')),
       );
     }
   }
-
 
   Future<void> _processAndSaveTiles(String downloadedFilePath) async {
     try {
@@ -93,22 +139,22 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
         allowedExtensions: ['mbtiles'],
         type: FileType.custom,
       );
-      
+
       if (saveLocation == null) {
         // User cancelled the save dialog
         setState(() {
           _isProcessing = false;
         });
-        
+
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('File saving cancelled')),
         );
-        
+
         // Clean up downloaded file
         await _downloadService.deleteFile(downloadedFilePath);
         return;
       }
-      
+
       // Process the MBTiles file by removing specified layers
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -116,42 +162,59 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
           duration: Duration(seconds: 5),
         ),
       );
-      
+
       print('Processing MBTiles file: $downloadedFilePath');
       print('Saving to: $saveLocation');
-      
+
+      // Compile the list of layers to remove
+      // If entry.value is true, it means the layer is CHECKED in the "Configure Layers to Remove" dialog,
+      // so it should be added to the list of layers to actually remove.
+      final List<String> layersToActuallyRemove = _layerVisibility.entries
+          .where((entry) => entry.value) 
+          .map((entry) => entry.key)
+          .toList();
+
+      print('Layers selected for removal: $layersToActuallyRemove');
+
       final processedFilePath = await _mbtilesService.processMBTiles(
-        downloadedFilePath, 
+        downloadedFilePath,
         saveLocation,
+        dynamicLayersToRemove: layersToActuallyRemove,
+        onProgress: (progress) {
+          if (mounted) {
+            setState(() {
+              _processingProgress = progress;
+            });
+          }
+        },
       );
-      
+
       print('Processed MBTiles saved to: $processedFilePath');
-      
+
       setState(() {
         _isProcessing = false;
       });
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Processed file saved to: $processedFilePath'),
           duration: const Duration(seconds: 5),
         ),
       );
-      
+
       // Clean up downloaded file
       await _downloadService.deleteFile(downloadedFilePath);
-      
     } catch (e) {
       print('Error processing or saving MBTiles: $e');
-      
+
       setState(() {
         _isProcessing = false;
       });
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Processing failed: ${e.toString()}')),
       );
-      
+
       // Clean up downloaded file
       await _downloadService.deleteFile(downloadedFilePath);
     }
@@ -198,24 +261,96 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
                 ],
               )
             : _isProcessing
-                ? const Column(
+                ? Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      LinearProgressIndicator(),
-                      SizedBox(height: 8),
-                      Text('Processing MBTiles file... Please wait.'),
+                      LinearProgressIndicator(value: _processingProgress),
+                      const SizedBox(height: 8),
+                      Text('Processing: ${(_processingProgress * 100).toStringAsFixed(1)}%'),
                     ],
                   )
-                : ElevatedButton.icon(
-                    onPressed: _downloadAndProcessMBTilesFile,
-                    icon: const Icon(Icons.download),
-                    label: const Text('Download & Process MBTiles'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                    ),
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.layers_clear),
+                        tooltip: 'Configure Layers to Remove',
+                        onPressed: () {
+                          _showSettingsOverlay(context);
+                        },
+                      ),
+                      const SizedBox(width: 8), // Add some spacing
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _downloadAndProcessMBTilesFile,
+                          icon: const Icon(Icons.download),
+                          label: const Text(
+                            'Download & Process MBTiles',
+                            textAlign: TextAlign.center,
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                            textStyle: const TextStyle(fontSize: 16),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
       ),
+    );
+  }
+
+  void _showSettingsOverlay(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Configure Layers to Remove'),
+              content: SingleChildScrollView(
+                child: ListBody(
+                  children: _layerVisibility.keys.map((String layerName) {
+                    return CheckboxListTile(
+                      title: Text(layerName
+                          .replaceAll('_', ' ')
+                          .split(' ')
+                          .map((e) => e[0].toUpperCase() + e.substring(1))
+                          .join(' ')), // Prettify name
+                      subtitle: Text(_layerDescriptions[layerName] ?? 'No description available.'),
+                      value: _layerVisibility[layerName],
+                      onChanged: (bool? value) {
+                        setDialogState(() {
+                          _layerVisibility[layerName] = value ?? false;
+                        });
+                        // Update the main screen state to reflect changes
+                        setState(() {
+                          _layerVisibility[layerName] = value ?? false;
+                        });
+                        // This is where you would inform MBTilesService about the layers to remove
+                        // For now, we just print it. The actual list of layers to remove
+                        // in MBTilesService is static. This UI now prepares a list
+                        // that will be passed to MBTilesService.
+                        print("Layer $layerName selected for removal: ${_layerVisibility[layerName]}");
+                      },
+                    );
+                  }).toList(),
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  child: const Text('Done'),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -277,4 +412,4 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
       ),
     );
   }
-} 
+}

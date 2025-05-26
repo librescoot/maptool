@@ -61,7 +61,11 @@ class MBTilesService {
   /// Processes an MBTiles file by removing specified layers
   /// Returns the path to the processed file
   Future<String> processMBTiles(
-      String inputFilePath, String outputFilePath) async {
+    String inputFilePath,
+    String outputFilePath, {
+    List<String>? dynamicLayersToRemove, // Optional parameter for dynamic layers
+    void Function(double progress)? onProgress, // Callback for progress updates
+  }) async {
     // Initialize SQLite
     if (Platform.isWindows || Platform.isLinux) {
       sqfliteFfiInit();
@@ -117,7 +121,8 @@ class MBTilesService {
           final tileData = tile['tile_data'] as Uint8List;
 
           try {
-            final processedData = await _processTileData(tileData);
+            // Pass the dynamic list of layers to remove to _processTileData
+            final processedData = await _processTileData(tileData, dynamicLayersToRemove);
 
             // Only update if the tile was modified
             if (processedData != null) {
@@ -135,7 +140,10 @@ class MBTilesService {
           }
 
           // Provide progress updates
-          if (processedCount % 100 == 0) {
+          if (onProgress != null) {
+            final progress = tileCount > 0 ? processedCount / tileCount : 0.0;
+            onProgress(progress);
+          } else if (processedCount % 100 == 0) { // Fallback to console logging if no callback
             print(
                 'Processed $processedCount / $tileCount tiles, modified $modifiedCount tiles');
           }
@@ -144,6 +152,9 @@ class MBTilesService {
         await batch.commit();
       }
 
+      if (onProgress != null) {
+        onProgress(1.0); // Ensure completion is reported
+      }
       print('Processed $processedCount tiles, modified $modifiedCount tiles');
 
       // Close the database
@@ -177,10 +188,12 @@ class MBTilesService {
   }
 
   /// Process an individual tile by removing specified layers
-  Future<Uint8List?> _processTileData(Uint8List tileData) async {
+  Future<Uint8List?> _processTileData(Uint8List tileData, [List<String>? currentLayersToRemove]) async {
     if (tileData.isEmpty) {
       return null;
     }
+
+    final effectiveLayersToRemove = currentLayersToRemove ?? layersToRemove; // Use dynamic list if provided, else static
 
     try {
       // Decompress the tile data
@@ -206,7 +219,7 @@ class MBTilesService {
       final filteredLayers = <Tile_Layer>[];
 
       for (final layer in tile.layers) {
-        if (!layersToRemove.contains(layer.name)) {
+        if (!effectiveLayersToRemove.contains(layer.name)) {
           if (layer.name == 'streets') {
             // if this is a street layer, we want to filter out some of the streets
             // that are not relevant to us.
