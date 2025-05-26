@@ -24,7 +24,18 @@ class DownloadService {
       
       final filePath = '${downloadsDir.path}/$filename';
       final file = File(filePath);
+
+      // Check if the file already exists
+      if (await file.exists()) {
+        print('File already exists, using existing: $filePath');
+        if (onProgress != null) {
+          onProgress(1.0); // Report 100% progress immediately
+        }
+        return filePath; // Return the path to the existing file
+      }
       
+      // If file doesn't exist, proceed with download
+      print('File not found locally, downloading: $filename');
       if (onProgress != null) {
         // For larger files with progress tracking, use HttpClient
         final httpClient = HttpClient();
@@ -137,4 +148,4 @@ class DownloadService {
       print('Error cleaning up downloads: $e');
     }
   }
-} 
+}
