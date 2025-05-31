@@ -7,6 +7,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/vector_tile.dart';
+import '../models/profile.dart'; // Added import for Profile
 
 // Helper class for passing arguments to the isolate for tile processing.
 class _TileProcessingArgs {
@@ -145,28 +146,8 @@ class MBTilesService {
   // Define all known layer names based on the layerDescriptions map
   static final List<String> _allKnownLayerNames = layerDescriptions.keys.toList();
 
-  // This map stores the user's preference for keeping (true) or removing (false) each layer
-  static final Map<String, bool> _staticGlobalLayersToKeepSelection =
-      Map.fromEntries(
-    _allKnownLayerNames.map(
-      (layerName) => MapEntry(
-        layerName,
-        !defaultLayersToNotKeep.contains(layerName),
-      ),
-    ),
-  );
-
-  Map<String, bool> get globalLayersToKeepSelection {
-    return _staticGlobalLayersToKeepSelection;
-  }
-
-  void setGlobalLayerKeepSelection(String layerName, bool shouldKeep) {
-    if (_staticGlobalLayersToKeepSelection.containsKey(layerName)) {
-      _staticGlobalLayersToKeepSelection[layerName] = shouldKeep;
-    } else {
-      print("Warning: Attempted to set selection for unknown layer: $layerName");
-    }
-  }
+  // _staticGlobalLayersToKeepSelection, globalLayersToKeepSelection, and setGlobalLayerKeepSelection REMOVED
+  // Profile objects will now carry this information.
 
   static const Set<String> streetsToKeep = {
     'track', 'path', 'service', 'unclassified', 'residential', 'tertiary',
@@ -176,13 +157,14 @@ class MBTilesService {
   Future<String> processMBTiles(
     String inputFilePath,
     String outputFilePath, {
-    List<String>? dynamicLayersToRemove,
+    required Profile profile, // Changed from dynamicLayersToRemove
     void Function(double progress)? onProgress,
   }) async {
-    if (Platform.isWindows || Platform.isLinux) {
-      sqfliteFfiInit();
-      databaseFactory = databaseFactoryFfi;
-    }
+    // FFI initialization is now expected to be done in main.dart
+    // if (Platform.isWindows || Platform.isLinux) {
+    //   sqfliteFfiInit();
+    //   databaseFactory = databaseFactoryFfi;
+    // }
 
     final tempFilePath = '$inputFilePath.temp';
     final inputFile = File(inputFilePath);
@@ -204,11 +186,25 @@ class MBTilesService {
       int processedTilesInLoop = 0;
       int totalModifiedTiles = 0;
 
-      final effectiveLayersToRemove = dynamicLayersToRemove ??
-          _staticGlobalLayersToKeepSelection.entries
-              .where((entry) => !entry.value) // Find layers marked not to keep
-              .map((entry) => entry.key)
-              .toList();
+      // Determine layers to remove based on the profile.
+      // If profile.layersToKeep is empty, it means keep all, so remove none.
+      // Otherwise, remove any layer NOT in profile.layersToKeep.
+      List<String> effectiveLayersToRemove = [];
+      if (profile.layersToKeep.isNotEmpty) {
+        effectiveLayersToRemove = _allKnownLayerNames
+            .where((layerName) => !profile.layersToKeep.contains(layerName))
+            .toList();
+      }
+      // Special handling for 'streets' layer based on 'streetsToKeep' values
+      // This is existing logic, ensure it's compatible.
+      // The current _processTileDataIsolate handles 'streets' filtering internally.
+      // We just need to ensure 'streets' layer itself is not in effectiveLayersToRemove if it's meant to be kept partially.
+      // If 'streets' is in profile.layersToKeep, it won't be in effectiveLayersToRemove.
+
+      print('Processing with profile: ${profile.name}');
+      print('Layers to keep from profile: ${profile.layersToKeep}');
+      print('Effective layers to remove: $effectiveLayersToRemove');
+
 
       for (int i = 0; i < tileCount; i += batchSize) {
         final tilesData = await db.query(
