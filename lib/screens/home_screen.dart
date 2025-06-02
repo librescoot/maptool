@@ -74,11 +74,9 @@ class _HomeScreenState extends State<HomeScreen> {
         bool originalExists = await originalFile.exists();
         bool processedExists = await processedFile.exists();
         RegionStatus status = RegionStatus.notDownloaded;
-        // String? currentFilePath = originalExists ? originalFilePath : null; // Not used directly here
 
         if (processedExists) {
           status = RegionStatus.processed;
-          // currentFilePath = processedFilePath; 
         } else if (originalExists) {
           status = RegionStatus.downloaded;
         }
@@ -124,7 +122,7 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.list_alt_outlined),
-            onPressed: () => _showManageProfilesDialog(context), // Updated Call
+            onPressed: () => _showManageProfilesDialog(context),
             tooltip: 'Manage Profiles',
           ),
           IconButton(
@@ -277,7 +275,7 @@ class _HomeScreenState extends State<HomeScreen> {
     bool isDeterminate = progress > 0 && progress < 1;
     return TextButton.icon(
       icon: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, value: isDeterminate ? progress : null)),
-      label: Text('$operationName ${isDeterminate ? (progress * 100).toStringAsFixed(0) + '%' : ''}'),
+      label: Text('$operationName ${isDeterminate ? '${(progress * 100).toStringAsFixed(0)}%' : ''}'),
       onPressed: null, 
       style: TextButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -330,7 +328,7 @@ class _HomeScreenState extends State<HomeScreen> {
       enabled: !disabled,
       onSelected: (String value) {
         if (value == 'manage_profiles') {
-          _showManageProfilesDialog(context); // Updated Call
+          _showManageProfilesDialog(context);
         } else {
           final selectedProfile = _profiles.firstWhere((p) => p.id == value, orElse: () => _defaultProfile!);
           _onProcess(region, selectedProfile);
@@ -468,7 +466,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final loadedDefaultProfile = await _dbService.getDefaultProfile(); 
         if (mounted) setState(() => _defaultProfile = loadedDefaultProfile);
         if (loadedDefaultProfile == null) {
-           _showManageProfilesDialog(context); // Updated Call
+           _showManageProfilesDialog(context);
            return;
         }
         profileToUse = loadedDefaultProfile;
@@ -484,7 +482,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final sanitizedRegionName = region.name.replaceAll(RegExp(r'[^\w\s-]'), '').replaceAll(RegExp(r'\s+'), '_');
     final sanitizedProfileName = profileToUse.name.replaceAll(RegExp(r'[^\w\s-]'), '').replaceAll(RegExp(r'\s+'), '_');
-    final suggestedFileName = '${sanitizedRegionName}_${sanitizedProfileName}.mbtiles';
+    final suggestedFileName = '${sanitizedRegionName}_$sanitizedProfileName.mbtiles';
 
     String? outputFilePath = await FilePicker.platform.saveFile(
       dialogTitle: 'Save processed map as...',
@@ -571,9 +569,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return showDialog<void>(
       context: context,
-      barrierDismissible: false, // Prevent dismissing by tapping outside
+      barrierDismissible: false,
       builder: (BuildContext dialogContext) {
-        return StatefulBuilder( // Needed for updating state within the dialog (e.g. checkboxes)
+        return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
               title: Text(existingProfile == null ? 'Create New Profile' : 'Edit Profile "${existingProfile.name}"'),
@@ -599,8 +597,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       Text('Layers to Keep:', style: Theme.of(context).textTheme.titleMedium),
                       const SizedBox(height: 8),
                       SizedBox(
-                        height: MediaQuery.of(context).size.height * 0.35, // Constrain height
-                        width: MediaQuery.of(context).size.width * 0.8, // Constrain width
+                        height: MediaQuery.of(context).size.height * 0.35,
+                        width: MediaQuery.of(context).size.width * 0.8,
                         child: Container(
                           decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(4)),
                           child: ListView.builder(
@@ -747,9 +745,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                       await _dbService.deleteProfile(profile.id);
                                       await _dbService.ensureValidDefaultProfile(); // Ensure a default profile exists
                                       await _loadInitialData(); // Reload data
-                                      // If the manage dialog is still open (which it won't be due to pop above), refresh its state
-                                      // For now, we assume it's closed and reopened if needed.
-                                      // To refresh this specific dialog if it were kept open:
                                       setDialogState(() {}); 
                                       ScaffoldMessenger.of(this.context).showSnackBar(SnackBar(content: Text('Profile "${profile.name}" deleted.')));
                                     }
@@ -770,9 +765,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   icon: const Icon(Icons.add),
                   label: const Text('Add New Profile'),
                   onPressed: () async {
-                     Navigator.of(dialogContext).pop(); // Close manage dialog
-                    await _showEditProfileDialog(this.context); // Show create dialog
-                    // _loadInitialData is called within _showEditProfileDialog on save
+                     Navigator.of(dialogContext).pop();
+                    await _showEditProfileDialog(this.context);
                   },
                 ),
               ],
