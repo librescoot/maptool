@@ -116,7 +116,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('LibreScoot MapTool'),
+        title: const Text('Librescoot MapTool'),
         centerTitle: true,
         backgroundColor: Theme.of(context).colorScheme.primaryContainer,
         actions: [
